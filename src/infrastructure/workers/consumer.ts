@@ -43,7 +43,7 @@ export async function consumeOnce(root: EntityManager, client: SQSClient, urls: 
     const received = await client.send(new ReceiveMessageCommand({
         QueueUrl: urls.input, MaxNumberOfMessages: 5,
         WaitTimeSeconds: Math.min(20, Math.max(0, Number(process.env.WORKER_POLL_SECONDS ?? '10'))),
-        VisibilityTimeout: 60, AttributeNames: ['ApproximateReceiveCount'],
+        VisibilityTimeout: 60, MessageSystemAttributeNames: ['ApproximateReceiveCount'],
     }));
     let handled = 0;
     for (const message of received.Messages ?? []) {

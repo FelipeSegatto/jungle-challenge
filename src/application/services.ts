@@ -77,7 +77,8 @@ export class WalletService {
                 row.version = 1;
                 row.createdAt = now;
                 row.updatedAt = now;
-                await em.persistAndFlush(row); // FK exige wallet antes de OPENING.
+                em.persist(row);
+                await em.flush(); // FK exige wallet antes de OPENING.
                 if (amount.isPositive()) {
                     const transactionId = randomUUID();
                     const wager = new WagerRow();
@@ -97,7 +98,8 @@ export class WalletService {
                     wager.responseBalanceAmount = amount.toJSON().amount;
                     wager.createdAt = now;
                     wager.processedAt = now;
-                    await em.persistAndFlush(wager);
+                    em.persist(wager);
+                    await em.flush();
                     const ledger = WalletLedgerEntry.create({ walletId: wallet.id, transactionId, direction: 'CREDIT', money: amount,
                         balanceBefore: Money.zero(amount.currency), balanceAfter: amount, createdAt: now });
                     const entry = new LedgerRow();
@@ -283,7 +285,8 @@ export class WagerService {
                     row.processedAt = wager.processedAt;
                     if (wager.status === 'PENDING_REFERENCE')
                         row.nextAttemptAt = new Date(now.getTime() + 1000);
-                    await em.persistAndFlush(row); // FK do ledger depende da transação financeira.
+                    em.persist(row);
+                    await em.flush(); // FK do ledger depende da transação financeira.
                     if (wager.status === 'PROCESSED' && direction) {
                         walletRow.balance = wallet.balance.toJSON().amount;
                         walletRow.version = wallet.version;
@@ -394,7 +397,7 @@ export class WagerService {
                 reference.providerId !== row.providerId || reference.roundId !== row.roundId ||
                 reference.currency !== row.currency)
                 failure = 'REFERENCE_SCOPE_MISMATCH';
-            else if (reference.amount !== row.amount)
+            else if (reference.amount !== row.amount && (row.kind === 'REFUND' || row.kind === 'ROLLBACK'))
                 failure = 'REFERENCE_AMOUNT_MISMATCH';
             else if (row.kind === 'REFUND' && reference.kind !== 'BET')
                 failure = 'INVALID_REFERENCE_KIND';

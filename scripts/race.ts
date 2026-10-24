@@ -1,4 +1,5 @@
 /** Teste HTTP real: precisa de PostgreSQL e aplicação rodando (PORT=3000). */
+export {}; // Força escopo de módulo: evita colisão de identificadores com outros scripts top-level.
 const url = process.env.BASE_URL ?? 'http://localhost:3000';
 const id = crypto.randomUUID();
 async function request(path: string, body: object, key?: string): Promise<{

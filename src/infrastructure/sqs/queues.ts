@@ -60,6 +60,7 @@ export async function submitMessage(client: SQSClient, queueUrl: string, event: 
     messageId: string;
     data: {
         walletId: string;
+        [key: string]: unknown;
     };
     [key: string]: unknown;
 }): Promise<void> {

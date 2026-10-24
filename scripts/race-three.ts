@@ -2,6 +2,7 @@
  * Rode em 3 terminais: PORT=3001 bun run start; PORT=3002 bun run start; PORT=3003 bun run start
  * Então: bun run test:3instances
  */
+export {}; // Força escopo de módulo: evita colisão de identificadores com outros scripts top-level.
 const urls = (process.env.BASE_URLS ?? 'http://localhost:3001,http://localhost:3002,http://localhost:3003').split(',');
 if (urls.length < 3)
     throw Error('Provide at least three process URLs');

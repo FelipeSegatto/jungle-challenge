@@ -1,7 +1,7 @@
 {
-  "name": "jungle-wagering-day-one",
+  "name": "distributed-wagering-processor",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/main.ts",
@@ -11,9 +11,17 @@
     "test:integration": "bun test test/integration.test.ts",
     "test:race": "bun scripts/race.ts",
     "test:3instances": "bun scripts/race-three.ts",
-    "migration:up": "bunx mikro-orm migration:up",
-    "migration:down": "bunx mikro-orm migration:down",
-    "migration:pending": "bunx mikro-orm migration:pending"
+    "migration:up": "bunx mikro-orm migration:up --config ./mikro-orm.config.ts",
+    "migration:down": "bunx mikro-orm migration:down --config ./mikro-orm.config.ts",
+    "migration:pending": "bunx mikro-orm migration:pending --config ./mikro-orm.config.ts",
+    "start:worker": "bun src/worker-main.ts",
+    "queues:init": "bun scripts/init-queues.ts",
+    "test:messaging": "bun test test/messaging.test.ts",
+    "test:references": "bun test test/references.test.ts",
+    "test:all": "bun run test && bun run test:integration && bun run test:messaging && bun run test:references && bun run test:race && bun run test:3instances",
+    "demo:sqs": "bun scripts/demo-sqs.ts",
+    "format": "bunx prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
+    "format:check": "bunx prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\""
   },
   "dependencies": {
     "@mikro-orm/core": "^7.0.0",
@@ -28,13 +36,25 @@
     "class-validator": "^0.14.2",
     "decimal.js": "^10.6.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "@aws-sdk/client-sqs": "^3.900.0",
+    "dotenv": "^16.6.1",
+    "prom-client": "^15.1.3"
   },
   "devDependencies": {
     "@mikro-orm/cli": "^7.0.0",
-    "@oxc-node/core": "^1.0.0",
     "@types/bun": "^1.3.0",
     "@types/express": "^5.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "@oxc-node/core": "^1.0.0",
+    "@types/node": "^22.0.0",
+    "prettier": "^3.6.2"
+  },
+  "mikro-orm": {
+    "configPaths": [
+      "./mikro-orm.config.ts"
+    ],
+    "preferTs": true,
+    "tsLoader": "oxc"
   }
 }

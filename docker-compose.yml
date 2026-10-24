@@ -1,3 +1,13 @@
+x-api-base: &api-base
+  build: .
+  env_file: .env.docker
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    localstack:
+      condition: service_started
+  restart: on-failure
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,20 +16,51 @@ services:
       POSTGRES_PASSWORD: jungle
       POSTGRES_DB: jungle_wagering
     ports:
-      - "55432:5432"
+      - "${PG_PORT:-55432}:5432"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - jungle_postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jungle -d jungle_wagering"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
-      retries: 15
+      retries: 30
+
   localstack:
     image: localstack/localstack:4.10
     environment:
       SERVICES: sqs
       AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
     ports:
       - "4566:4566"
+
+  migrate:
+    build: .
+    env_file: .env.docker
+    command: ["bun", "run", "migration:up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api1:
+    <<: *api-base
+    ports: ["3001:3000"]
+  api2:
+    <<: *api-base
+    ports: ["3002:3000"]
+  api3:
+    <<: *api-base
+    ports: ["3003:3000"]
+
+  worker1:
+    <<: *api-base
+    ports: ["9091:9090"]
+    command: ["bun", "run", "start:worker"]
+  worker2:
+    <<: *api-base
+    ports: ["9092:9090"]
+    command: ["bun", "run", "start:worker"]
+
 volumes:
-  pg_data:
+  jungle_postgres:

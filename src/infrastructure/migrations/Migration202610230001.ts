@@ -1,8 +1,7 @@
 import { Migration } from '@mikro-orm/migrations';
-
 export class Migration202610230001 extends Migration {
-  async up(): Promise<void> {
-    this.addSql(`
+    async up(): Promise<void> {
+        this.addSql(`
       CREATE TABLE wallets (
         id uuid PRIMARY KEY,
         player_id uuid NOT NULL,
@@ -18,7 +17,7 @@ export class Migration202610230001 extends Migration {
         CONSTRAINT wallets_currency_format CHECK (currency ~ '^[A-Z]{3}$')
       );
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE TABLE wager_transactions (
         id uuid PRIMARY KEY,
         provider_id text NOT NULL,
@@ -50,13 +49,13 @@ export class Migration202610230001 extends Migration {
         CONSTRAINT wagers_response_nonnegative CHECK (response_balance_amount IS NULL OR response_balance_amount >= 0)
       );
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE UNIQUE INDEX wagers_one_reversal_per_kind
       ON wager_transactions(reference_transaction_id,kind)
       WHERE kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED';
     `);
-    this.addSql(`CREATE INDEX wagers_waiting_reference ON wager_transactions(next_attempt_at, id) WHERE status='PENDING_REFERENCE';`);
-    this.addSql(`
+        this.addSql(`CREATE INDEX wagers_waiting_reference ON wager_transactions(next_attempt_at, id) WHERE status='PENDING_REFERENCE';`);
+        this.addSql(`
       CREATE TABLE wallet_ledger_entries (
         id uuid PRIMARY KEY,
         wallet_id uuid NOT NULL,
@@ -75,16 +74,16 @@ export class Migration202610230001 extends Migration {
         )
       );
     `);
-    this.addSql(`CREATE INDEX ledger_cursor_idx ON wallet_ledger_entries(wallet_id, created_at DESC, id DESC);`);
-    this.addSql(`
+        this.addSql(`CREATE INDEX ledger_cursor_idx ON wallet_ledger_entries(wallet_id, created_at DESC, id DESC);`);
+        this.addSql(`
       CREATE FUNCTION prevent_ledger_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RAISE EXCEPTION 'LEDGER_IMMUTABLE'; END; $$;
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE TRIGGER ledger_immutable BEFORE UPDATE OR DELETE ON wallet_ledger_entries
       FOR EACH ROW EXECUTE FUNCTION prevent_ledger_mutation();
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE FUNCTION prevent_wager_terminal_change() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
         IF OLD.status IN ('PROCESSED','REJECTED','FAILED') THEN
@@ -93,11 +92,11 @@ export class Migration202610230001 extends Migration {
         RETURN NEW;
       END; $$;
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE TRIGGER wager_terminal_immutable BEFORE UPDATE OR DELETE ON wager_transactions
       FOR EACH ROW EXECUTE FUNCTION prevent_wager_terminal_change();
     `);
-    this.addSql(`
+        this.addSql(`
       CREATE TABLE outbox_messages (
         id uuid PRIMARY KEY, aggregate_id uuid NOT NULL,
         event_type text NOT NULL, payload jsonb NOT NULL,
@@ -107,8 +106,8 @@ export class Migration202610230001 extends Migration {
         occurred_at timestamptz NOT NULL DEFAULT now()
       );
     `);
-    this.addSql(`CREATE INDEX outbox_due_idx ON outbox_messages(next_attempt_at,occurred_at,id) WHERE published_at IS NULL;`);
-    this.addSql(`
+        this.addSql(`CREATE INDEX outbox_due_idx ON outbox_messages(next_attempt_at,occurred_at,id) WHERE published_at IS NULL;`);
+        this.addSql(`
       CREATE TABLE inbox_messages (
         id uuid PRIMARY KEY, consumer_name text NOT NULL,
         message_id text NOT NULL, payload_hash char(64) NOT NULL,
@@ -116,15 +115,14 @@ export class Migration202610230001 extends Migration {
         CONSTRAINT inbox_dedupe UNIQUE (consumer_name, message_id)
       );
     `);
-  }
-
-  async down(): Promise<void> {
-    this.addSql('DROP TABLE IF EXISTS inbox_messages;');
-    this.addSql('DROP TABLE IF EXISTS outbox_messages;');
-    this.addSql('DROP TABLE IF EXISTS wallet_ledger_entries;');
-    this.addSql('DROP FUNCTION IF EXISTS prevent_ledger_mutation();');
-    this.addSql('DROP TABLE IF EXISTS wager_transactions;');
-    this.addSql('DROP FUNCTION IF EXISTS prevent_wager_terminal_change();');
-    this.addSql('DROP TABLE IF EXISTS wallets;');
-  }
+    }
+    async down(): Promise<void> {
+        this.addSql('DROP TABLE IF EXISTS inbox_messages;');
+        this.addSql('DROP TABLE IF EXISTS outbox_messages;');
+        this.addSql('DROP TABLE IF EXISTS wallet_ledger_entries;');
+        this.addSql('DROP FUNCTION IF EXISTS prevent_ledger_mutation();');
+        this.addSql('DROP TABLE IF EXISTS wager_transactions;');
+        this.addSql('DROP FUNCTION IF EXISTS prevent_wager_terminal_change();');
+        this.addSql('DROP TABLE IF EXISTS wallets;');
+    }
 }

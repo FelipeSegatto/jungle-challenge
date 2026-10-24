@@ -1,74 +1,184 @@
-# Jungle Gaming — Dia 1: núcleo financeiro e concorrência
+# Distributed Wagering Processor
 
-> Projeto didático de base para o case **Distributed Wagering Processor**, não solução final do case. Stack: Bun 1.x, TypeScript strict, NestJS, PostgreSQL, MikroORM 7 e migrações reversíveis. O LocalStack aparece no Compose como preparação para o Dia 2; nenhum publisher/consumer SQS é implementado neste pacote.
+Serviço financeiro para operações de apostas, construído com **NestJS**, **Bun 1.x**, **TypeScript estrito**, **MikroORM 7**, **PostgreSQL** e **AWS SQS (LocalStack)**.
 
-## Começar do zero
+A prioridade é preservar as invariantes financeiras sob concorrência, redelivery, reordenação de mensagens e falhas de processo. A API e o consumidor SQS chamam o mesmo caso de uso; o PostgreSQL, e não o broker, é a fonte de verdade.
 
-1. Instale Bun 1.x, Docker Desktop/Engine + Compose e uma IDE.
-2. Rode `cp .env.example .env`.
-3. Rode `bun install` (isso cria `bun.lock`; versione-o).
-4. Rode `docker compose up -d postgres`.
-5. Rode `bun run migration:up`.
-6. Rode `bun run test`.
-7. Rode `bun run dev`.
-8. Em outro terminal rode `bun run test:race`.
-9. Para 3 instâncias, rode `PORT=3001 bun run start`, `PORT=3002 bun run start`, `PORT=3003 bun run start` em terminais separados, e `bun run test:3instances` num quarto terminal.
-10. Rode `bun run test:integration` com o app aberto.
+## Requisitos
 
-## URLs úteis
+- Docker Desktop / Docker Engine com Docker Compose
+- Bun 1.x para desenvolver e executar os testes a partir do host
+- PowerShell no Windows; terminal Bash/Zsh em Linux/macOS
 
-- `GET /health/live`
-- `GET /health/ready` (**Dia 1 verifica só PostgreSQL; Dia 2 acrescentar SQS**)
-- `POST /wallets`
-- `GET /wallets/:walletId`
-- `GET /wallets/:walletId/ledger?limit=50&cursor=...`
-- `POST /wallets/:walletId/reconciliation`
-- `POST /wagering/transactions` com header `Idempotency-Key`
-- `GET /wagering/transactions/:transactionId`
-- `GET /providers/:providerId/wagering/transactions/:externalTransactionId`
+## Início rápido (recomendado: ambiente isolado)
 
-## Crie uma wallet
-
-```bash
-curl -sS -X POST http://localhost:3000/wallets \
-  -H 'content-type: application/json' \
-  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"100.00","currency":"BRL"}}'
+```powershell
+# PowerShell, na raiz do projeto
+Copy-Item .env.example .env
+bun install
+# Sobe PostgreSQL, LocalStack, migrations, 3 APIs e 2 workers
+# Na primeira execução, o Compose constrói as imagens.
+docker compose up -d --build
+docker compose ps
+Invoke-RestMethod http://localhost:3001/health/ready
+Invoke-RestMethod http://localhost:3001/health/live
+Invoke-RestMethod http://localhost:3001/health/metrics
+powershell -ExecutionPolicy Bypass -File .\scripts\demo.ps1
 ```
 
-Pegue o `id` retornado e coloque em `WALLET_ID`:
+APIs nas portas **3001, 3002, 3003**. PostgreSQL exposto ao host em **55432** (sem conflito com um PostgreSQL Windows na 5432). SQS em **4566**. Métricas dos dois workers em **9091/metrics** e **9092/metrics**. O endpoint `/health/ready` responde 200 somente quando **PostgreSQL e SQS** estiverem acessíveis.
 
-```bash
-export WALLET_ID='COLE_UUID_DA_WALLET_AQUI'
-curl -sS -X POST http://localhost:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:bet-1' \
-  -d "{\"providerId\":\"provider-a\",\"externalTransactionId\":\"bet-1\",\"playerId\":\"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1\",\"walletId\":\"$WALLET_ID\",\"roundId\":\"round-1\",\"gameId\":\"fortune-chimp\",\"kind\":\"BET\",\"money\":{\"amount\":\"25.00\",\"currency\":\"BRL\"}}"
+Se você já tem um projeto anterior com container e volumes próprios, não apague volumes para corrigir credenciais. Este Compose usa o volume `jungle_postgres` no projeto atual e senha de desenvolvimento `jungle`. Em produção, use secrets e credenciais independentes.
+
+## Desenvolvimento com API fora do Docker
+
+```powershell
+Copy-Item .env.example .env
+bun install
+# Nesta modalidade, a API e os scripts rodam no Windows.
+docker compose up -d postgres localstack
+bun run migration:up
+bun run queues:init
+bun run dev
 ```
 
-Rode exatamente a mesma solicitação outra vez: a resposta deverá ter `idempotentReplay:true`, mesmo quando houver movimentos posteriores na wallet. Consulte `/ledger` e `/reconciliation`.
+Abra um segundo terminal para o worker:
 
-## O que foi implementado
+```powershell
+bun run start:worker
+```
 
-- `Money` decimal imutável, entradas `string` de escala 2, conflito de moedas.
-- `Wallet` como aggregate root e `WalletLedgerEntry` imutável.
-- `WagerTransaction` com factories, metadados imutáveis, status e transições terminais.
-- `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK` (para referência existente).
-- Referência ainda inexistente vira `PENDING_REFERENCE`, reprocessamento automático será realizado **no Dia 2**.
-- Idempotência por `Idempotency-Key` + SHA-256 de JSON canônico dos dados de negócio, UNIQUE no PostgreSQL e resposta original persistida.
-- `PESSIMISTIC_WRITE` na linha da wallet; ledger, status, saldo e outbox no mesmo commit.
-- Migrations SQL `up`/`down`, `CHECK` e índices, trigger de ledger imutável e de estado terminal imutável.
-- Testes unitários, integração real e script de 50 chamadas concorrentes.
+O `.env.example` aponta para `127.0.0.1:55432`. `mikro-orm.config.ts` carrega `.env` explicitamente para que tanto o CLI quanto o NestJS usem as mesmas credenciais. Para executar três processos no host:
 
-## O que ainda NÃO foi implementado
+```powershell
+$env:PORT='3001'; bun run start
+# Outros dois terminais: PORT 3002 e 3003
+```
 
-- SQS consumer, Inbox atômica na recepção SQS, Outbox publisher, backoff, DLQ, shutdown do consumer.
-- Worker de reprocessamento de `PENDING_REFERENCE` e limite/TTL.
-- Observabilidade completa (métricas de duplicatas, retry, DLQ, conflitos de lock, outbox lag etc.).
-- Readiness de SQS, múltiplos processos Docker Compose com carga e testes de crash recovery.
-- Integração real com IdP. O `NoopAuthGuard` deixa o ponto de extensão explícito e **não oferece segurança**.
-- Testes de carga p95/p99, dashboards, integração com Keycloak.
+Nunca execute simultaneamente o ambiente Compose completo e essas APIs locais nas mesmas portas.
 
-**Atenção:** o pacote foi escrito para seguir as APIs documentadas de MikroORM v7, mas não foi possível instalar pacotes ou iniciar Docker/Bun no ambiente que gerou esta entrega. A sintaxe TypeScript foi verificada por transpilation estática; a validação final do runtime, migrations, testes de integração e compatibilidade deve ocorrer no seu computador. Não considere as condições eliminatórias comprovadas antes de executar `test:integration` e `test:race`.
+## Comandos disponíveis
 
-## Decisões
+| Comando | Função |
+|---|---|
+| `bun run migration:up` | Aplica migrations versionadas |
+| `bun run migration:down` | Reverte a última migration (somente ambiente descartável) |
+| `bun run migration:pending` | Lista migrations pendentes |
+| `bun run dev` | API com watch |
+| `bun run start:worker` | Consumer, retry de referências e publisher Outbox |
+| `bun run queues:init` | Cria as três filas SQS |
+| `bun run typecheck` | TypeScript strict, sem gerar arquivos |
+| `bun run test` | Testes unitários de domínio |
+| `bun run test:integration` | HTTP + PostgreSQL reais |
+| `bun run test:messaging` | PostgreSQL + LocalStack reais, Inbox/Outbox/redelivery |
+| `bun run test:references` | Referências fora de ordem, TTL e reprocessamento |
+| `bun run test:race` | Duas apostas concorrentes e 50 replays |
+| `bun run test:3instances` | Três instâncias independentes |
+| `bun run test:all` | Suíte completa (requer API e containers ativos) |
 
-Leia `ARCHITECTURE.md` e `AULA_DIA_1.md` antes de modificar o fluxo transacional. Não acrescente publicação SQS dentro de `em.transactional()`.
+Para rodar testes com o Compose completo, o padrão dos testes HTTP aponta à porta 3000. No PowerShell defina, no terminal dos testes:
+
+```powershell
+$env:BASE_URL='http://localhost:3001'
+bun run test:integration
+bun run test:race
+bun run test:3instances
+bun run test:messaging
+bun run test:references
+```
+
+**Não envie resultados de testes como se tivessem passado sem executá-los no seu ambiente.** Verifique os códigos de saída e os estados persistidos.
+
+## Fluxos de negócio
+
+- `POST /wallets`: uma wallet por `(playerId,currency)`; saldo inicial positivo produz `OPENING` + ledger `CREDIT` na mesma transação SQL.
+- `BET`: débito condicionado ao saldo disponível.
+- `WIN`: crédito, referência à BET opcional.
+- `LOSS`: estado processado sem movimentação financeira.
+- `REFUND`: crédito integral de BET processada; uma reversão por tipo/referência.
+- `ROLLBACK`: movimento inverso integral de BET, WIN ou REFUND; não pode deixar saldo negativo.
+- `PENDING_REFERENCE`: operação recebida antes da referência é persistida e reprocessada pelo worker com backoff; expiração é REJECTED/REFERENCE_NOT_FOUND.
+- `OPENING`: operação interna, indisponível no contrato HTTP ou na fila de entrada.
+
+Toda operação HTTP necessita `Idempotency-Key`. O hash SHA-256 é calculado sobre o JSON canônico dos campos de negócio; chave igual/payload diferente recebe `409`.
+
+## Endpoints
+
+| Método | Rota | Resposta principal |
+|---|---|---|
+| POST | `/wallets` | 201 |
+| GET | `/wallets/:walletId` | 200 |
+| GET | `/wallets/:walletId/ledger?limit=50&cursor=...` | 200 (cursor opaco) |
+| POST | `/wallets/:walletId/reconciliation` | 200 |
+| POST | `/wagering/transactions` | 200 processada, 202 pendente, 422 rejeitada |
+| GET | `/wagering/transactions/:transactionId` | 200 |
+| GET | `/providers/:providerId/wagering/transactions/:externalTransactionId` | 200 |
+| GET | `/health/live` | 200 sem autenticação |
+| GET | `/health/ready` | 200 ou 503 sem autenticação |
+| GET | `/health/metrics` | 200 Prometheus text |
+
+**Exemplo de submissão:**
+
+```http
+POST /wagering/transactions HTTP/1.1
+Content-Type: application/json
+Idempotency-Key: provider-a:bet-001
+
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "bet-001",
+  "playerId": "UUID_DO_JOGADOR",
+  "walletId": "UUID_DA_WALLET",
+  "roundId": "round-1",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "25.00", "currency": "BRL" }
+}
+```
+
+## Filas SQS
+
+- Entrada: `wager-transactions.fifo`
+- DLQ: `wager-transactions-dlq.fifo` (redrive após 5 recebimentos)
+- Integração: `wager-events.fifo`
+
+Formato da mensagem de entrada:
+
+```json
+{
+  "messageId": "msg-001",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-10-24T12:00:00.000Z",
+  "data": {
+    "providerId": "provider-a",
+    "externalTransactionId": "bet-001",
+    "idempotencyKey": "provider-a:bet-001",
+    "playerId": "UUID_DO_JOGADOR",
+    "walletId": "UUID_DA_WALLET",
+    "roundId": "round-1",
+    "gameId": "fortune-chimp",
+    "kind": "BET",
+    "money": { "amount": "25.00", "currency": "BRL" }
+  }
+}
+```
+
+O `MessageGroupId` é o ID da wallet, otimizando ordenação. As invariantes continuam sendo garantidas pelas transações e constraints no PostgreSQL. `DeleteMessage` ocorre **depois** do commit. Eventos de saída utilizam `eventId` como identidade de deduplicação e o consumidor externo deve aplicar sua própria deduplicação persistente.
+
+## Observabilidade
+
+Logs JSON de eventos técnicos sem corpo completo de payload financeiro. Métricas: operações por status, replays, retries, DLQ, conflitos transacionais, duração de processamento, divergência de reconciliação e idade da Outbox. Métricas dos workers são expostas separadamente.
+
+## Documentação complementar
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): invariantes, modelos, escolha de locks, Inbox/Outbox, falhas, limites.
+- [GUIA_DE_APRESENTACAO.md](GUIA_DE_APRESENTACAO.md): roteiro de demonstração e questões de arquitetura.
+- [CHECKLIST_DE_VALIDACAO.md](CHECKLIST_DE_VALIDACAO.md): critérios concretos a conferir antes da entrega.
+
+## Encerramento e dados
+
+```powershell
+docker compose down
+```
+
+Esse comando mantém os volumes. **Não use `docker compose down -v` em um banco que contenha dados importantes.**

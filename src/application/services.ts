@@ -155,6 +155,15 @@ export class WagerService {
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
                 const result = await this.em.transactional(async (em) => {
+                    // Pre-check: a Idempotency-Key é a fonte da verdade (seção 9) e precisa ser
+                    // resolvida ANTES de qualquer validação dependente da wallet. Assim, a mesma
+                    // key com payload divergente dá sempre IDEMPOTENCY_CONFLICT, mesmo que
+                    // walletId/playerId do segundo payload sejam inválidos ou de outro dono —
+                    // nunca um 404/422 "vazando" por causa da ordem de checagem. Replay puro
+                    // retorna aqui sem nunca disputar o lock da wallet.
+                    const preCheck = await this.resolveByIdempotencyKey(em, header, hash);
+                    if (preCheck)
+                        return preCheck;
                     // Lock POR WALLET: sincroniza 3+ instâncias sem mutex global.
                     const walletRow = await em.findOne(WalletRow, { id: command.walletId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
                     if (!walletRow)
@@ -190,12 +199,13 @@ export class WagerService {
                         received.processedAt = received.receivedAt;
                         em.persist(received);
                     }
-                    const existing = await em.findOne(WagerRow, { idempotencyKey: header });
-                    if (existing) {
-                        if (existing.payloadHash !== hash)
-                            throw new DomainError('IDEMPOTENCY_CONFLICT', 'Chave já usada com outro payload.', 409);
-                        return this.response(existing, true);
-                    }
+                    // Segunda verificação, agora com a wallet travada: fecha a janela de corrida
+                    // entre o pre-check acima e a aquisição do lock (duas requisições reusando a
+                    // MESMA key nova, na mesma wallet). Wallets diferentes com a mesma key nova
+                    // continuam cobertas pela constraint UNIQUE(idempotency_key) + recuperação do 23505 abaixo.
+                    const existing = await this.resolveByIdempotencyKey(em, header, hash);
+                    if (existing)
+                        return existing;
                     const sameExternal = await em.findOne(WagerRow, { providerId: command.providerId, externalTransactionId: command.externalTransactionId });
                     if (sameExternal)
                         throw new DomainError('EXTERNAL_ID_CONFLICT', 'ID externo já registrado com outra chave.', 409);
@@ -477,6 +487,16 @@ export class WagerService {
         return { transactionId: row.id, status: row.status,
             balance: row.responseBalanceAmount === null ? null : { amount: row.responseBalanceAmount, currency: row.currency },
             failureCode: row.failureCode, idempotentReplay: replay };
+    }
+    /** Idempotency-Key é a fonte da verdade: null se a key é nova; resposta de replay se o payload bate;
+     *  lança IDEMPOTENCY_CONFLICT se a mesma key já foi usada com outro payload. */
+    private async resolveByIdempotencyKey(em: EntityManager, header: string, hash: string): Promise<WagerResponse | null> {
+        const existing = await em.findOne(WagerRow, { idempotencyKey: header });
+        if (!existing)
+            return null;
+        if (existing.payloadHash !== hash)
+            throw new DomainError('IDEMPOTENCY_CONFLICT', 'Chave já usada com outro payload.', 409);
+        return this.response(existing, true);
     }
 }
 @Injectable()

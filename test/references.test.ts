@@ -45,4 +45,44 @@ describe('Pendências de referência', () => {
         expect(saved.status).toBe('REJECTED');
         expect((await orm.em.fork().findOneOrFail(WalletRow, { id: wallet.id })).balance).toBe('10.00');
     }, 90000);
+    /**
+     * Regressão: WIN paga o valor do prêmio, não o valor da aposta — REFERENCE_AMOUNT_MISMATCH só
+     * vale para REFUND/ROLLBACK (seção 7). O caminho síncrono (BET já processada) e o caminho de
+     * retryPendingReference (WIN chega antes da BET) precisam concordar nisso; antes da correção,
+     * o segundo caminho rejeitava a WIN por engano quando o valor divergia do da BET referenciada.
+     */
+    test('WIN 50 referenciando BET 10: BET-first e WIN-first/PENDING_REFERENCE terminam PROCESSED com o mesmo resultado financeiro', async () => {
+        async function run(winFirst: boolean): Promise<string> {
+            const playerId = uuid(), providerId = 'provider-' + uuid(), betExternal = 'bet-' + uuid(), winExternal = 'win-' + uuid();
+            const wallet = await new WalletService(orm.em.fork()).create(playerId, { amount: '100.00', currency: 'BRL' });
+            const common = { providerId, playerId, walletId: wallet.id, roundId: 'r-1', gameId: 'g-1' };
+            const wagers = new WagerService(orm.em.fork());
+            if (winFirst) {
+                const win = await wagers.process({ ...common, externalTransactionId: winExternal, kind: 'WIN',
+                    money: { amount: '50.00', currency: 'BRL' }, referenceExternalTransactionId: betExternal }, 'idem-' + uuid());
+                expect(win.status).toBe('PENDING_REFERENCE');
+                const bet = await wagers.process({ ...common, externalTransactionId: betExternal, kind: 'BET',
+                    money: { amount: '10.00', currency: 'BRL' } }, 'idem-' + uuid());
+                expect(bet.status).toBe('PROCESSED');
+                await orm.em.fork().nativeUpdate(WagerRow, { id: win.transactionId }, { nextAttemptAt: new Date(0) });
+                expect(await wagers.retryPendingReference(win.transactionId)).toBe('processed');
+                const row = await orm.em.fork().findOneOrFail(WagerRow, { id: win.transactionId });
+                expect(row.status).toBe('PROCESSED');
+                expect(row.failureCode).toBeNull();
+            } else {
+                const bet = await wagers.process({ ...common, externalTransactionId: betExternal, kind: 'BET',
+                    money: { amount: '10.00', currency: 'BRL' } }, 'idem-' + uuid());
+                expect(bet.status).toBe('PROCESSED');
+                const win = await wagers.process({ ...common, externalTransactionId: winExternal, kind: 'WIN',
+                    money: { amount: '50.00', currency: 'BRL' }, referenceExternalTransactionId: betExternal }, 'idem-' + uuid());
+                expect(win.status).toBe('PROCESSED');
+            }
+            return (await orm.em.fork().findOneOrFail(WalletRow, { id: wallet.id })).balance;
+        }
+        const betFirstBalance = await run(false);
+        const winFirstBalance = await run(true);
+        // 100.00 (opening) - 10.00 (BET) + 50.00 (WIN) = 140.00, igual nos dois caminhos.
+        expect(betFirstBalance).toBe('140.00');
+        expect(winFirstBalance).toBe('140.00');
+    }, 90000);
 });

@@ -141,3 +141,74 @@ describe('INTEGRAÇÃO REAL — HTTP + PostgreSQL', () => {
   });
 
 });
+
+/**
+ * A Idempotency-Key é a fonte da verdade (seção 9) e precisa ser resolvida ANTES de qualquer
+ * validação dependente da wallet: mesma key + payload divergente deve SEMPRE dar
+ * IDEMPOTENCY_CONFLICT (409), mesmo quando o segundo payload também teria, isoladamente,
+ * um motivo de rejeição ligado à wallet (player errado, wallet de outro dono, wallet inexistente).
+ * Caso contrário o código HTTP devolvido passa a depender da ordem interna das validações,
+ * o que o desafio explicitamente proíbe ("colapsar... obriga o provedor a interpretar mensagem").
+ */
+describe('IDEMPOTÊNCIA — mesma key, payload divergente, independente da wallet', () => {
+  function tx(fields: { playerId: string; walletId: string; money?: { amount: string; currency: string } }, externalId: string) {
+    return { providerId: 'provider-idem', externalTransactionId: externalId, roundId: 'round-1', gameId: 'game-1',
+      kind: 'BET', money: fields.money ?? { amount: '10.00', currency: 'BRL' },
+      playerId: fields.playerId, walletId: fields.walletId };
+  }
+  test('mesma key + amount diferente -> IDEMPOTENCY_CONFLICT', async () => {
+    const w = await open();
+    const key = 'idem-' + cid(), txId = 'tx-' + cid();
+    const first = await post('/wagering/transactions', tx(w, txId), key);
+    expect(first.data.status).toBe('PROCESSED');
+    const diffAmount = await post('/wagering/transactions',
+      tx({ ...w, money: { amount: '11.00', currency: 'BRL' } }, txId), key);
+    expect(diffAmount.http).toBe(409);
+    expect(diffAmount.data.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  test('mesma key + playerId diferente (mesma wallet) -> IDEMPOTENCY_CONFLICT, não PLAYER_WALLET_MISMATCH', async () => {
+    const w = await open();
+    const other = await open();
+    const key = 'idem-' + cid(), txId = 'tx-' + cid();
+    const first = await post('/wagering/transactions', tx(w, txId), key);
+    expect(first.data.status).toBe('PROCESSED');
+    const diffPlayer = await post('/wagering/transactions', tx({ playerId: other.playerId, walletId: w.walletId }, txId), key);
+    expect(diffPlayer.http).toBe(409);
+    expect(diffPlayer.data.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  test('mesma key + walletId diferente e válida -> IDEMPOTENCY_CONFLICT, não um novo processamento', async () => {
+    const w = await open();
+    const other = await open();
+    const key = 'idem-' + cid(), txId = 'tx-' + cid();
+    const first = await post('/wagering/transactions', tx(w, txId), key);
+    expect(first.data.status).toBe('PROCESSED');
+    const diffWallet = await post('/wagering/transactions', tx(other, txId), key);
+    expect(diffWallet.http).toBe(409);
+    expect(diffWallet.data.code).toBe('IDEMPOTENCY_CONFLICT');
+    // A wallet "other" não deve ter sido tocada pela tentativa conflitante.
+    expect((await get(`/wallets/${other.walletId}`)).data.balance.amount).toBe('100.00');
+  });
+  test('mesma key + walletId inexistente -> IDEMPOTENCY_CONFLICT, não WALLET_NOT_FOUND', async () => {
+    const w = await open();
+    const key = 'idem-' + cid(), txId = 'tx-' + cid();
+    const first = await post('/wagering/transactions', tx(w, txId), key);
+    expect(first.data.status).toBe('PROCESSED');
+    const ghost = await post('/wagering/transactions', tx({ playerId: w.playerId, walletId: cid() }, txId), key);
+    expect(ghost.http).toBe(409);
+    expect(ghost.data.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  test('mesma key + mesmo payload -> replay do resultado original (sem novo efeito)', async () => {
+    const w = await open();
+    const key = 'idem-' + cid(), txId = 'tx-' + cid();
+    const payload = tx(w, txId);
+    const first = await post('/wagering/transactions', payload, key);
+    expect(first.data.status).toBe('PROCESSED');
+    expect(first.data.idempotentReplay).toBe(false);
+    const replay = await post('/wagering/transactions', payload, key);
+    expect(replay.http).toBe(200);
+    expect(replay.data.transactionId).toBe(first.data.transactionId);
+    expect(replay.data.idempotentReplay).toBe(true);
+    expect(replay.data.balance.amount).toBe(first.data.balance.amount);
+    expect((await get(`/wallets/${w.walletId}`)).data.balance.amount).toBe('90.00');
+  });
+});

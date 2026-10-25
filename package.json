@@ -18,7 +18,12 @@
     "queues:init": "bun scripts/init-queues.ts",
     "test:messaging": "bun test test/messaging.test.ts",
     "test:references": "bun test test/references.test.ts",
-    "test:all": "bun run test && bun run test:integration && bun run test:messaging && bun run test:references && bun run test:race && bun run test:3instances",
+    "test:parallel-wallets": "bun test test/parallel-wallets.test.ts",
+    "test:crash-recovery": "bun test test/worker-crash-recovery.test.ts",
+    "test:sigterm": "bun test test/worker-sigterm.test.ts",
+    "test:consumer-retry": "bun test test/consumer-retry-dlq.test.ts",
+    "test:consumer-dlq-persistent": "bun test test/consumer-dlq-persistent.test.ts",
+    "test:all": "bun run test && bun run test:integration && bun run test:messaging && bun run test:references && bun run test:parallel-wallets && bun run test:crash-recovery && bun run test:sigterm && bun run test:consumer-retry && bun run test:consumer-dlq-persistent && bun run test:race && bun run test:3instances",
     "demo:sqs": "bun scripts/demo-sqs.ts",
     "format": "bunx prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
     "format:check": "bunx prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\""

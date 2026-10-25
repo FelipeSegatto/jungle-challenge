@@ -27,7 +27,16 @@ export interface Wallet {
  */
 export type WagerStatus = 'PROCESSED' | 'REJECTED' | 'PENDING_REFERENCE' | 'FAILED';
 
+/** Os 5 tipos que um cliente pode SUBMETER (POST /wagering/transactions) — casa com processWagerSchema. */
 export type WagerKind = 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
+
+/**
+ * Os tipos que podem voltar numa CONSULTA (GET) — inclui OPENING, criado internamente na abertura
+ * da wallet (providerId "__internal__", nunca aceito via POST — ver wagers_kind_valid na migration
+ * do backend). Achado real da revisão de qualidade: `WagerTransaction.kind` usava `WagerKind` e
+ * silenciosamente não tipava esse valor real que a API pode devolver.
+ */
+export type WagerTransactionKind = WagerKind | 'OPENING';
 
 /** Resposta de POST /wagering/transactions — shape confirmado por execução real, NÃO é o mesmo da consulta GET. */
 export interface WagerSubmissionResult {
@@ -47,7 +56,7 @@ export interface WagerTransaction {
   readonly providerId: string;
   readonly externalTransactionId: string;
   readonly walletId: string;
-  readonly kind: WagerKind;
+  readonly kind: WagerTransactionKind;
   readonly status: WagerStatus;
   readonly failureCode: string | null;
   readonly referenceExternalTransactionId: string | null;

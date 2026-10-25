@@ -2,6 +2,7 @@ import { Scale, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { formatMoney } from '@/lib/money/format';
 import { useReconciliation } from './useReconciliation';
 import { ApiRequestError, ApiConnectionError } from '@/lib/api/client';
@@ -64,32 +65,14 @@ export function ReconciliationPanel({ walletId }: { walletId: string }) {
               </p>
             </div>
           )}
-          <dl className="divide-y divide-slate-800 text-sm">
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Wallet ID</dt>
-              <dd className="font-mono text-xs text-slate-300">{mutation.data.walletId}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Stored balance</dt>
-              <dd className="tabular-nums text-slate-200">{formatMoney(mutation.data.storedBalance)}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Calculated balance</dt>
-              <dd className="tabular-nums text-slate-200">{formatMoney(mutation.data.calculatedBalance)}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Difference</dt>
-              <dd className="tabular-nums text-slate-200">{formatMoney(mutation.data.difference)}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Consistent</dt>
-              <dd className="font-mono text-slate-200">{String(mutation.data.consistent)}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Checked entries</dt>
-              <dd className="tabular-nums text-slate-200">{mutation.data.checkedEntries}</dd>
-            </div>
-          </dl>
+          <DescriptionList>
+            <DescriptionRow label="Wallet ID" value={<span className="font-mono text-xs">{mutation.data.walletId}</span>} />
+            <DescriptionRow label="Stored balance" value={<span className="tabular-nums">{formatMoney(mutation.data.storedBalance)}</span>} />
+            <DescriptionRow label="Calculated balance" value={<span className="tabular-nums">{formatMoney(mutation.data.calculatedBalance)}</span>} />
+            <DescriptionRow label="Difference" value={<span className="tabular-nums">{formatMoney(mutation.data.difference)}</span>} />
+            <DescriptionRow label="Consistent" mono value={String(mutation.data.consistent)} />
+            <DescriptionRow label="Checked entries" value={<span className="tabular-nums">{mutation.data.checkedEntries}</span>} />
+          </DescriptionList>
         </div>
       ) : null}
     </Panel>

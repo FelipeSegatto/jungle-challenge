@@ -30,6 +30,12 @@ Nome da interface: **Jungle Wagering Console**.
 
 React, TypeScript estrito, Vite, Tailwind CSS, `@tanstack/react-query`, Zod, `lucide-react`, `decimal.js`. Sem router, sem state manager global, sem UI kit. `package.json` próprio dentro de `frontend/`, independente do `package.json` do backend na raiz.
 
+**Testes — duas suítes, de propósito:** `bun test src` (lógica pura pré-existente: schemas de domínio como `scenarioBuilders`/`verdicts`/`prometheus` — sem DOM) e `vitest run` / `bun run test:ui` (Vitest + React Testing Library + MSW, em `frontend/test/`, para schemas Zod, formatação monetária, montagem de requests/headers, estados de componente e comportamento de formulário). `bun run test:all` roda as duas. Nunca migrar a suíte pura para Vitest só por estética — não há benefício concreto e seria puro churn.
+
+**Pinos de versão não-óbvios em devDependencies — não "atualizar" sem reler isto:**
+- `vitest@^3` (não `^5`): Vitest 5 exige Vite 6+ (`vite/module-runner` não existe no Vite 5 que este projeto usa). Só subir para Vitest 5 junto com uma subida deliberada do Vite.
+- `jsdom@^25` (não a mais nova disponível na época): achado real desta revisão — o `fetch` embutido do jsdom conflitava com o interceptor de baixo nível do MSW (`AbortSignal` de realms diferentes), quebrando qualquer teste MSW que devolvesse corpo JSON. Contornado trocando `fetch`/`Headers`/`Request`/`Response` globais pelos do pacote `undici` em `test/setup.ts` — ver o comentário lá antes de mexer nisso.
+
 ## Como a API realmente se comporta (confirmado por execução, não só leitura)
 
 Backend sem `app.enableCors()` em `src/main.ts` — chamar a API direto do dev server do Vite dá erro de CORS. **Use sempre o proxy do Vite** (`/api/*` → `http://localhost:3000` por padrão, configurável via `VITE_API_PROXY_TARGET` para apontar pra `3001`/`3002`/`3003` quando rodando via `docker-compose.yml`). Nunca chame a API com URL absoluta a partir do browser.

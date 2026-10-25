@@ -1,6 +1,6 @@
 import { useQueries, type QueryFunctionContext } from '@tanstack/react-query';
-import { API_INSTANCES, apiRequestWithMeta, ApiRequestError, ApiConnectionError, type ApiInstance } from '@/lib/api/client';
-import type { HealthLive, HealthReady } from '@/types/api';
+import { API_INSTANCES, ApiRequestError, ApiConnectionError, type ApiInstance } from '@/lib/api/client';
+import { getLive, getReady } from '@/features/health/api';
 
 export type HealthState = 'loading' | 'ok' | 'down';
 /** healthy = live+ready ok; unhealthy = servidor responde mas dependências não; unavailable = nem o live responde. */
@@ -12,9 +12,10 @@ interface TimedResult<T> {
   readonly durationMs: number;
 }
 
-async function timedGet<T>(instance: ApiInstance, path: string, signal?: AbortSignal): Promise<TimedResult<T>> {
+/** Reaproveita `getLive`/`getReady` de `features/health/api.ts` — só mede o tempo em volta, não reimplementa a chamada. */
+async function timed<T>(fetcher: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<TimedResult<T>> {
   const started = performance.now();
-  const { data } = await apiRequestWithMeta<T>(instance, path, { signal });
+  const data = await fetcher(signal);
   return { data, durationMs: performance.now() - started };
 }
 
@@ -55,7 +56,7 @@ export function useExtendedInstancesHealth(): ExtendedInstanceHealth[] {
   const liveResults = useQueries({
     queries: API_INSTANCES.map((instance) => ({
       queryKey: ['ext-health', instance, 'live'] as const,
-      queryFn: ({ signal }: QueryFunctionContext) => timedGet<HealthLive>(instance, '/health/live', signal),
+      queryFn: ({ signal }: QueryFunctionContext) => timed((s) => getLive(instance, s), signal),
       refetchInterval: 10_000,
     })),
   });
@@ -63,7 +64,7 @@ export function useExtendedInstancesHealth(): ExtendedInstanceHealth[] {
   const readyResults = useQueries({
     queries: API_INSTANCES.map((instance) => ({
       queryKey: ['ext-health', instance, 'ready'] as const,
-      queryFn: ({ signal }: QueryFunctionContext) => timedGet<HealthReady>(instance, '/health/ready', signal),
+      queryFn: ({ signal }: QueryFunctionContext) => timed((s) => getReady(instance, s), signal),
       refetchInterval: 10_000,
     })),
   });

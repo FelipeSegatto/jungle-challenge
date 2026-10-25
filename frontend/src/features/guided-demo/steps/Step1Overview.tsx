@@ -1,12 +1,12 @@
 import { useEffect } from 'react';
 import { Panel } from '@/components/ui/Panel';
 import { HealthDashboard } from '@/features/health/HealthDashboard';
-import { useInstancesHealth } from '@/features/health/useInstancesHealth';
+import { useExtendedInstancesHealth } from '@/features/system-health-messaging/health/useExtendedHealth';
 import type { StepOutcome } from '../steps';
 
 /** Reaproveita o HealthDashboard já usado na Overview — zero lógica de health duplicada aqui. */
 export function Step1Overview({ onOutcome }: { onOutcome: (outcome: StepOutcome) => void }) {
-  const instances = useInstancesHealth();
+  const instances = useExtendedInstancesHealth();
 
   useEffect(() => {
     if (instances.some((i) => i.live === 'loading' || i.ready === 'loading')) {

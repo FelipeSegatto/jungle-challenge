@@ -1,7 +1,7 @@
 import { Wallet, ArrowLeftRight, History, Clock, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { HealthDashboard } from '@/features/health/HealthDashboard';
-import { useInstancesHealth } from '@/features/health/useInstancesHealth';
+import { useExtendedInstancesHealth } from '@/features/system-health-messaging/health/useExtendedHealth';
 import { WalletDetails } from '@/features/wallets/WalletDetails';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
@@ -9,14 +9,14 @@ import { useSessionHistory } from '@/lib/session-history/SessionHistoryContext';
 import { useToast } from '@/lib/toast/ToastContext';
 import type { ViewId } from '@/app/navigation';
 
-function mostRecentCheck(instances: ReturnType<typeof useInstancesHealth>): Date | undefined {
+function mostRecentCheck(instances: ReturnType<typeof useExtendedInstancesHealth>): Date | undefined {
   const timestamps = instances.map((i) => i.lastCheckedAt).filter((d): d is Date => d !== undefined);
   if (timestamps.length === 0) return undefined;
   return new Date(Math.max(...timestamps.map((d) => d.getTime())));
 }
 
 export function OverviewPage({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
-  const instances = useInstancesHealth();
+  const instances = useExtendedInstancesHealth();
   const { entries, logEvent } = useSessionHistory();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();

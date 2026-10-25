@@ -1,7 +1,7 @@
 import { ChevronDown } from 'lucide-react';
 import { API_INSTANCES, type ApiInstance } from '@/lib/api/client';
 import { useSelectedInstance } from '@/lib/instance/InstanceContext';
-import { useInstancesHealth } from '@/features/health/useInstancesHealth';
+import { useExtendedInstancesHealth } from '@/features/system-health-messaging/health/useExtendedHealth';
 import { toneClasses } from '@/lib/ui/styles';
 import { focusRing } from '@/lib/ui/styles';
 
@@ -12,7 +12,7 @@ import { focusRing } from '@/lib/ui/styles';
  */
 export function InstancePicker() {
   const { selected, setSelected } = useSelectedInstance();
-  const instances = useInstancesHealth();
+  const instances = useExtendedInstancesHealth();
   const current = instances.find((entry) => entry.instance === selected);
   const tone = current?.ready === 'ok' ? 'success' : current?.ready === 'down' ? 'danger' : 'warning';
   const dotClasses = toneClasses[tone];

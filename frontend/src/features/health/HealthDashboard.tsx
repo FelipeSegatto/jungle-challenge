@@ -1,5 +1,5 @@
 import { ServerCog, WifiOff } from 'lucide-react';
-import { useInstancesHealth, type HealthState } from './useInstancesHealth';
+import { useExtendedInstancesHealth, type HealthState } from '@/features/system-health-messaging/health/useExtendedHealth';
 import { Panel } from '@/components/ui/Panel';
 import { StatusPill } from '@/components/ui/StatusPill';
 import type { Tone } from '@/lib/ui/styles';
@@ -12,7 +12,7 @@ const STATE_LABEL: Record<HealthState, string> = { ok: 'ok', down: 'indisponíve
  * instância fora do ar nunca derruba as outras nem a aplicação — cada card é independente.
  */
 export function HealthDashboard() {
-  const instances = useInstancesHealth();
+  const instances = useExtendedInstancesHealth();
 
   return (
     <section aria-labelledby="health-heading" className="space-y-4">

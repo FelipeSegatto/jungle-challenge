@@ -5,6 +5,7 @@ import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { focusRing } from '@/lib/ui/styles';
 import { WalletDetails } from '@/features/wallets/WalletDetails';
 import { useWallet } from '@/features/wallets/useWallet';
@@ -130,30 +131,14 @@ export function Step3ProcessBet({ onOutcome }: { onOutcome: (outcome: StepOutcom
         {!result ? (
           <p className="text-sm text-slate-600">Execute a BET para ver a requisição, a resposta e o novo saldo aqui.</p>
         ) : (
-          <dl className="divide-y divide-slate-800 text-sm">
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">HTTP</dt>
-              <dd className="font-mono text-slate-200">{httpStatus}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Status</dt>
-              <dd>
-                <StatusPill tone={result.status === 'PROCESSED' ? 'success' : 'danger'}>{result.status}</StatusPill>
-              </dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Novo saldo (reconsultado)</dt>
-              <dd className="font-mono tabular-nums text-slate-200">{walletQuery.data?.balance.amount ?? '—'}</dd>
-            </div>
+          <DescriptionList>
+            <DescriptionRow mono label="HTTP" value={httpStatus} />
+            <DescriptionRow label="Status" value={<StatusPill tone={result.status === 'PROCESSED' ? 'success' : 'danger'}>{result.status}</StatusPill>} />
+            <DescriptionRow mono label="Novo saldo (reconsultado)" value={walletQuery.data?.balance.amount ?? '—'} />
             {ledgerQuery.data?.items[0] ? (
-              <div className="flex items-center justify-between py-1.5">
-                <dt className="text-xs text-slate-500">Último lançamento no ledger</dt>
-                <dd className="font-mono tabular-nums text-slate-200">
-                  {ledgerQuery.data.items[0].direction} {ledgerQuery.data.items[0].money.amount}
-                </dd>
-              </div>
+              <DescriptionRow mono label="Último lançamento no ledger" value={`${ledgerQuery.data.items[0].direction} ${ledgerQuery.data.items[0].money.amount}`} />
             ) : null}
-          </dl>
+          </DescriptionList>
         )}
       </Panel>
     </div>

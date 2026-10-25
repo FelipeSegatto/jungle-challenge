@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
 import { KeyRound } from 'lucide-react';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { toneClasses, type Tone } from '@/lib/ui/styles';
 import type { WagerStatus } from '@/types/api';
 import type { IdempotencyRequest } from './scenarioBuilders';
@@ -33,23 +33,14 @@ export function PayloadView({ request }: { request: IdempotencyRequest }) {
   );
 }
 
-function Row({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1.5">
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="text-right text-sm text-slate-200">{value}</dd>
-    </div>
-  );
-}
-
 /** Resumo genérico de um ScenarioRun — reaproveitado em todos os cenários B a E para não repetir o mesmo dl 5 vezes. */
 export function RunSummary({ run, currency }: { run: ScenarioRun; currency: string }) {
   return (
-    <dl className="divide-y divide-slate-800">
-      <Row label="HTTP" value={<span className="font-mono">{run.httpStatus !== null ? run.httpStatus : '— (sem resposta)'}</span>} />
+    <DescriptionList>
+      <DescriptionRow label="HTTP" value={<span className="font-mono">{run.httpStatus !== null ? run.httpStatus : '— (sem resposta)'}</span>} />
       {run.outcome === 'success' && run.result ? (
         <>
-          <Row
+          <DescriptionRow
             label="Transaction ID"
             value={
               <span className="flex items-center justify-end gap-1 font-mono text-xs">
@@ -58,23 +49,23 @@ export function RunSummary({ run, currency }: { run: ScenarioRun; currency: stri
               </span>
             }
           />
-          <Row label="Status" value={<StatusPill tone={STATUS_TONE[run.result.status]}>{run.result.status}</StatusPill>} />
-          <Row label="idempotentReplay" value={<span className="font-mono">{String(run.result.idempotentReplay)}</span>} />
-          <Row
+          <DescriptionRow label="Status" value={<StatusPill tone={STATUS_TONE[run.result.status]}>{run.result.status}</StatusPill>} />
+          <DescriptionRow label="idempotentReplay" value={<span className="font-mono">{String(run.result.idempotentReplay)}</span>} />
+          <DescriptionRow
             label="Saldo histórico (na resposta)"
             value={<span className="font-mono tabular-nums">{run.result.balance ? `${run.result.balance.amount} ${run.result.balance.currency}` : '—'}</span>}
           />
         </>
       ) : run.outcome === 'api-error' ? (
-        <Row label="Erro" value={<span className="font-mono text-xs text-red-300">{run.apiErrorCode}: {run.apiErrorMessage}</span>} />
+        <DescriptionRow label="Erro" value={<span className="font-mono text-xs text-red-300">{run.apiErrorCode}: {run.apiErrorMessage}</span>} />
       ) : (
-        <Row label="Falha de conexão" value={<span className="text-xs text-red-300">{run.apiErrorMessage ?? 'desconhecida'}</span>} />
+        <DescriptionRow label="Falha de conexão" value={<span className="text-xs text-red-300">{run.apiErrorMessage ?? 'desconhecida'}</span>} />
       )}
-      <Row
+      <DescriptionRow
         label="Saldo real da wallet (reconsultado)"
         value={<span className="font-mono tabular-nums">{run.walletBalanceAfter ? `${run.walletBalanceAfter} ${currency}` : '—'}</span>}
       />
-    </dl>
+    </DescriptionList>
   );
 }
 

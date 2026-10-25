@@ -3,6 +3,7 @@ import { PlusCircle, Zap, ScanSearch } from 'lucide-react';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { SideBySide } from '@/features/distributed-lab/idempotency/labUi';
 import { useConcurrencyDemo } from './useConcurrencyDemo';
 import type { StepOutcome } from '../steps';
@@ -38,18 +39,10 @@ export function Step5Concurrency({ onOutcome }: { onOutcome: (outcome: StepOutco
             Criar wallet isolada com R$ 100,00
           </Button>
         ) : (
-          <dl className="divide-y divide-slate-800 text-sm">
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Wallet ID</dt>
-              <dd className="font-mono text-xs text-slate-200">{demo.wallet.id}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Saldo</dt>
-              <dd className="font-mono tabular-nums text-slate-200">
-                {demo.wallet.balance.amount} {demo.wallet.balance.currency}
-              </dd>
-            </div>
-          </dl>
+          <DescriptionList>
+            <DescriptionRow label="Wallet ID" value={<span className="font-mono text-xs">{demo.wallet.id}</span>} />
+            <DescriptionRow mono label="Saldo inicial (no momento da criação)" value={`${demo.wallet.balance.amount} ${demo.wallet.balance.currency}`} />
+          </DescriptionList>
         )}
       </Panel>
 
@@ -75,20 +68,13 @@ export function Step5Concurrency({ onOutcome }: { onOutcome: (outcome: StepOutco
             </Button>
           ) : (
             <div className="space-y-4">
-              <dl className="divide-y divide-slate-800 text-sm">
-                <div className="flex items-center justify-between py-1.5">
-                  <dt className="text-xs text-slate-500">Saldo final</dt>
-                  <dd className="font-mono tabular-nums text-slate-200">
-                    {demo.wallet?.balance.amount} {demo.wallet?.balance.currency}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between py-1.5">
-                  <dt className="text-xs text-slate-500">Consistente (reconciliação real)</dt>
-                  <dd>
-                    <StatusPill tone={demo.reconciliation.consistent ? 'success' : 'danger'}>{demo.reconciliation.consistent ? 'sim' : 'não'}</StatusPill>
-                  </dd>
-                </div>
-              </dl>
+              <DescriptionList>
+                <DescriptionRow mono label="Saldo final" value={`${demo.wallet?.balance.amount} ${demo.wallet?.balance.currency}`} />
+                <DescriptionRow
+                  label="Consistente (reconciliação real)"
+                  value={<StatusPill tone={demo.reconciliation.consistent ? 'success' : 'danger'}>{demo.reconciliation.consistent ? 'sim' : 'não'}</StatusPill>}
+                />
+              </DescriptionList>
               {demo.ledgerEntries ? (
                 <div>
                   <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Ledger (mais recente primeiro)</p>

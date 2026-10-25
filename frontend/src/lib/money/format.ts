@@ -17,7 +17,7 @@ const CURRENCY_LABEL: Record<string, string> = {
 /** Formata para exibição, ex.: { amount: "25.00", currency: "BRL" } -> "R$ 25,00". */
 export function formatMoney(money: Money): string {
   const decimal = toDecimal(money);
-  const label = CURRENCY_LABEL[money.currency] ?? `${money.currency} `;
+  const label = CURRENCY_LABEL[money.currency] ?? money.currency;
   const parts = decimal.toFixed(2).split('.');
   const whole = parts[0] ?? '0';
   const fraction = parts[1] ?? '00';

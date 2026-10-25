@@ -8,6 +8,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { focusRing } from '@/lib/ui/styles';
 import type { Tone } from '@/lib/ui/styles';
 import { formatMoney } from '@/lib/money/format';
@@ -104,49 +105,29 @@ export function TransactionLookupPanel() {
       ) : query.isError ? (
         <ErrorState message={query.error instanceof Error ? query.error.message : 'Erro desconhecido.'} onRetry={() => void query.refetch()} />
       ) : query.data ? (
-        <dl className="divide-y divide-slate-800 text-sm">
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">Transaction ID</dt>
-            <dd className="flex items-center gap-1 font-mono text-slate-200">
-              {query.data.transactionId}
-              <CopyButton value={query.data.transactionId} label="Transaction ID" />
-            </dd>
-          </div>
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">kind</dt>
-            <dd className="font-mono text-slate-200">{query.data.kind}</dd>
-          </div>
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">status</dt>
-            <dd>
-              <StatusPill tone={STATUS_TONE[query.data.status]}>{query.data.status}</StatusPill>
-            </dd>
-          </div>
+        <DescriptionList>
+          <DescriptionRow
+            label="Transaction ID"
+            mono
+            value={
+              <span className="flex items-center gap-1">
+                {query.data.transactionId}
+                <CopyButton value={query.data.transactionId} label="Transaction ID" />
+              </span>
+            }
+          />
+          <DescriptionRow label="kind" mono value={query.data.kind} />
+          <DescriptionRow label="status" value={<StatusPill tone={STATUS_TONE[query.data.status]}>{query.data.status}</StatusPill>} />
           {query.data.failureCode ? (
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">failureCode</dt>
-              <dd className="font-mono text-xs text-red-300">{query.data.failureCode}</dd>
-            </div>
+            <DescriptionRow label="failureCode" value={<span className="font-mono text-xs text-red-300">{query.data.failureCode}</span>} />
           ) : null}
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">providerId</dt>
-            <dd className="font-mono text-slate-200">{query.data.providerId}</dd>
-          </div>
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">externalTransactionId</dt>
-            <dd className="font-mono text-slate-200">{query.data.externalTransactionId}</dd>
-          </div>
+          <DescriptionRow label="providerId" mono value={query.data.providerId} />
+          <DescriptionRow label="externalTransactionId" mono value={query.data.externalTransactionId} />
           {query.data.referenceExternalTransactionId ? (
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">referência</dt>
-              <dd className="font-mono text-slate-200">{query.data.referenceExternalTransactionId}</dd>
-            </div>
+            <DescriptionRow label="referência" mono value={query.data.referenceExternalTransactionId} />
           ) : null}
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">balance (no momento)</dt>
-            <dd className="tabular-nums text-slate-200">{query.data.balance ? formatMoney(query.data.balance) : '—'}</dd>
-          </div>
-        </dl>
+          <DescriptionRow label="balance (no momento)" value={<span className="tabular-nums">{query.data.balance ? formatMoney(query.data.balance) : '—'}</span>} />
+        </DescriptionList>
       ) : null}
     </Panel>
   );

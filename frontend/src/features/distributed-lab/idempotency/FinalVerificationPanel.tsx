@@ -3,6 +3,7 @@ import { ScanSearch } from 'lucide-react';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { reconcileWallet } from '@/features/ledger/api';
 import { useInspectedRequest } from '@/lib/api/useInspectedRequest';
 import { useSelectedInstance } from '@/lib/instance/InstanceContext';
@@ -51,30 +52,13 @@ export function FinalVerificationPanel({ walletId, onRefreshWallet }: { walletId
         </Button>
         {error ? <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</p> : null}
         {result ? (
-          <dl className="divide-y divide-slate-800 text-sm">
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Saldo armazenado</dt>
-              <dd className="font-mono tabular-nums text-slate-200">{result.storedBalance.amount} {result.storedBalance.currency}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Saldo calculado (soma do ledger)</dt>
-              <dd className="font-mono tabular-nums text-slate-200">{result.calculatedBalance.amount} {result.calculatedBalance.currency}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Diferença</dt>
-              <dd className="font-mono tabular-nums text-slate-200">{result.difference.amount} {result.difference.currency}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Lançamentos verificados</dt>
-              <dd className="font-mono text-slate-200">{result.checkedEntries}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Consistente</dt>
-              <dd>
-                <StatusPill tone={result.consistent ? 'success' : 'danger'}>{result.consistent ? 'sim' : 'não'}</StatusPill>
-              </dd>
-            </div>
-          </dl>
+          <DescriptionList>
+            <DescriptionRow mono label="Saldo armazenado" value={`${result.storedBalance.amount} ${result.storedBalance.currency}`} />
+            <DescriptionRow mono label="Saldo calculado (soma do ledger)" value={`${result.calculatedBalance.amount} ${result.calculatedBalance.currency}`} />
+            <DescriptionRow mono label="Diferença" value={`${result.difference.amount} ${result.difference.currency}`} />
+            <DescriptionRow mono label="Lançamentos verificados" value={result.checkedEntries} />
+            <DescriptionRow label="Consistente" value={<StatusPill tone={result.consistent ? 'success' : 'danger'}>{result.consistent ? 'sim' : 'não'}</StatusPill>} />
+          </DescriptionList>
         ) : null}
       </div>
     </Panel>

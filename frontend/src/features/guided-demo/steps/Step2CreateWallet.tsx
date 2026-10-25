@@ -5,6 +5,7 @@ import { Panel } from '@/components/ui/Panel';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import { CreateWalletForm } from '@/features/wallets/CreateWalletForm';
 import { WalletDetails } from '@/features/wallets/WalletDetails';
 import { getLedgerPage } from '@/features/ledger/api';
@@ -57,28 +58,12 @@ export function Step2CreateWallet({ onOutcome }: { onOutcome: (outcome: StepOutc
         ) : ledgerQuery.isError ? (
           <ErrorState message="Não foi possível consultar o ledger desta wallet." onRetry={() => void ledgerQuery.refetch()} />
         ) : openingEntry ? (
-          <dl className="divide-y divide-slate-800 text-sm">
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Direção</dt>
-              <dd className="font-mono text-slate-200">{openingEntry.direction}</dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Valor</dt>
-              <dd className="font-mono tabular-nums text-slate-200">
-                {openingEntry.money.amount} {openingEntry.money.currency}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Saldo antes → depois</dt>
-              <dd className="font-mono tabular-nums text-slate-200">
-                {openingEntry.balanceBefore.amount} → {openingEntry.balanceAfter.amount}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between py-1.5">
-              <dt className="text-xs text-slate-500">Quando</dt>
-              <dd className="text-xs text-slate-400">{new Date(openingEntry.createdAt).toLocaleString('pt-BR')}</dd>
-            </div>
-          </dl>
+          <DescriptionList>
+            <DescriptionRow mono label="Direção" value={openingEntry.direction} />
+            <DescriptionRow mono label="Valor" value={`${openingEntry.money.amount} ${openingEntry.money.currency}`} />
+            <DescriptionRow mono label="Saldo antes → depois" value={`${openingEntry.balanceBefore.amount} → ${openingEntry.balanceAfter.amount}`} />
+            <DescriptionRow label="Quando" value={<span className="text-xs">{new Date(openingEntry.createdAt).toLocaleString('pt-BR')}</span>} />
+          </DescriptionList>
         ) : (
           <EmptyState
             icon={WalletIcon}

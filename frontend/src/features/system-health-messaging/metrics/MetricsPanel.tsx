@@ -4,17 +4,9 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { DescriptionRow } from '@/components/ui/DescriptionList';
 import { useWageringMetrics } from './useWageringMetrics';
 import type { WageringMetricsSnapshot } from './prometheus';
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between py-1">
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="font-mono text-sm text-slate-200">{value}</dd>
-    </div>
-  );
-}
 
 function formatSeconds(value: number | null): string {
   if (value === null) return '—';
@@ -37,30 +29,31 @@ function SnapshotView({ snapshot }: { snapshot: WageringMetricsSnapshot }) {
         {statuses.length === 0 ? (
           <p className="text-xs text-slate-600">Nenhuma ainda neste processo.</p>
         ) : (
-          statuses.map(([status, count]) => <Row key={status} label={status} value={String(count)} />)
+          statuses.map(([status, count]) => <DescriptionRow key={status} mono label={status} value={String(count)} />)
         )}
       </div>
       <div className="py-2">
-        <Row label="Duplicatas (replay idempotente)" value={snapshot.duplicates !== null ? String(snapshot.duplicates) : '—'} />
-        <Row label="Conflitos de lock (PostgreSQL)" value={snapshot.lockConflicts !== null ? String(snapshot.lockConflicts) : '—'} />
-        <Row label="Enviadas direto à DLQ pelo consumer" value={snapshot.deadLettered !== null ? String(snapshot.deadLettered) : '—'} />
-        <Row label="Divergências de reconciliação" value={snapshot.reconciliationMismatches !== null ? String(snapshot.reconciliationMismatches) : '—'} />
+        <DescriptionRow mono label="Duplicatas (replay idempotente)" value={snapshot.duplicates !== null ? String(snapshot.duplicates) : '—'} />
+        <DescriptionRow mono label="Conflitos de lock (PostgreSQL)" value={snapshot.lockConflicts !== null ? String(snapshot.lockConflicts) : '—'} />
+        <DescriptionRow mono label="Enviadas direto à DLQ pelo consumer" value={snapshot.deadLettered !== null ? String(snapshot.deadLettered) : '—'} />
+        <DescriptionRow mono label="Divergências de reconciliação" value={snapshot.reconciliationMismatches !== null ? String(snapshot.reconciliationMismatches) : '—'} />
       </div>
       <div className="py-2">
         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Retries (por tipo)</p>
         {retries.length === 0 ? (
           <p className="text-xs text-slate-600">Nenhum retry ainda neste processo.</p>
         ) : (
-          retries.map(([kind, count]) => <Row key={kind} label={kind} value={String(count)} />)
+          retries.map(([kind, count]) => <DescriptionRow key={kind} mono label={kind} value={String(count)} />)
         )}
       </div>
       <div className="py-2">
-        <Row label="Latência média de commit" value={formatSeconds(avgProcessing)} />
-        <Row
+        <DescriptionRow mono label="Latência média de commit" value={formatSeconds(avgProcessing)} />
+        <DescriptionRow
+          mono
           label="Amostras de latência"
           value={snapshot.processingSecondsCount !== null ? String(snapshot.processingSecondsCount) : '—'}
         />
-        <Row label="Outbox lag (calculado ao vivo)" value={formatSeconds(snapshot.outboxOldestSeconds)} />
+        <DescriptionRow mono label="Outbox lag (calculado ao vivo)" value={formatSeconds(snapshot.outboxOldestSeconds)} />
       </div>
       <p className="pt-2 text-[11px] text-slate-600">
         {snapshot.otherSeriesCount} outras séries presentes na resposta (métricas padrão de processo Node.js — CPU, memória, event loop —

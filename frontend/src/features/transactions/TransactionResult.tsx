@@ -2,6 +2,7 @@ import { Sparkles, RotateCcw, ShieldAlert } from 'lucide-react';
 import { Panel } from '@/components/ui/Panel';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DescriptionList, DescriptionRow } from '@/components/ui/DescriptionList';
 import type { Tone } from '@/lib/ui/styles';
 import type { WagerStatus } from '@/types/api';
 import type { TransactionOutcome } from './types';
@@ -70,45 +71,29 @@ export function TransactionResult({ outcome }: { outcome: TransactionOutcome | n
 
   return (
     <Panel heading="Resultado da operação" actions={identityBadge}>
-      <dl className="divide-y divide-slate-800 text-sm">
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">Transaction ID</dt>
-          <dd className="flex items-center gap-1 font-mono text-slate-200">
-            {result.transactionId}
-            <CopyButton value={result.transactionId} label="Transaction ID" />
-          </dd>
-        </div>
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">Status</dt>
-          <dd>
-            <StatusPill tone={STATUS_TONE[result.status]}>{result.status}</StatusPill>
-          </dd>
-        </div>
+      <DescriptionList>
+        <DescriptionRow
+          label="Transaction ID"
+          mono
+          value={
+            <span className="flex items-center gap-1">
+              {result.transactionId}
+              <CopyButton value={result.transactionId} label="Transaction ID" />
+            </span>
+          }
+        />
+        <DescriptionRow label="Status" value={<StatusPill tone={STATUS_TONE[result.status]}>{result.status}</StatusPill>} />
         {result.failureCode ? (
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-xs text-slate-500">failureCode</dt>
-            <dd className="font-mono text-xs text-red-300">{result.failureCode}</dd>
-          </div>
+          <DescriptionRow label="failureCode" value={<span className="font-mono text-xs text-red-300">{result.failureCode}</span>} />
         ) : null}
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">Saldo retornado</dt>
-          <dd className="tabular-nums text-slate-200">
-            {result.balance ? `${result.balance.amount} ${result.balance.currency}` : '— (operação não alterou saldo)'}
-          </dd>
-        </div>
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">idempotentReplay</dt>
-          <dd className="font-mono text-slate-200">{String(result.idempotentReplay)}</dd>
-        </div>
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">Código HTTP</dt>
-          <dd className="font-mono text-slate-200">{httpStatus}</dd>
-        </div>
-        <div className="flex items-center justify-between py-1.5">
-          <dt className="text-xs text-slate-500">Instância utilizada</dt>
-          <dd className="font-mono text-slate-200">{instance}</dd>
-        </div>
-      </dl>
+        <DescriptionRow
+          label="Saldo retornado"
+          value={<span className="tabular-nums">{result.balance ? `${result.balance.amount} ${result.balance.currency}` : '— (operação não alterou saldo)'}</span>}
+        />
+        <DescriptionRow label="idempotentReplay" mono value={String(result.idempotentReplay)} />
+        <DescriptionRow label="Código HTTP" mono value={httpStatus} />
+        <DescriptionRow label="Instância utilizada" mono value={instance} />
+      </DescriptionList>
     </Panel>
   );
 }

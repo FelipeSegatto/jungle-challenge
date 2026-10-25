@@ -1,3 +1,5 @@
+import { assertQueueEmpty } from './harness/queueAssertions';
+import './harness/environment';
 /**
  * Integração real: PostgreSQL + LocalStack reais, worker real como processo filho. Cobre o item E
  * (retry/backoff do CONSUMER e chegada à DLQ) — distinto do teste de retry já existente em
@@ -16,11 +18,24 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { ReceiveMessageCommand, SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import config from '../mikro-orm.config';
-import { ensureQueues, sqsClient, submitMessage, type QueueUrls } from '../src/infrastructure/sqs/queues';
+import {
+  ensureQueues,
+  sqsClient,
+  submitMessage,
+  type QueueUrls,
+} from '../src/infrastructure/sqs/queues';
 import { WalletService } from '../src/application/services';
 import { WagerRow, LedgerRow } from '../src/infrastructure/entities/rows';
 import { assertBalanceMatchesLedger } from './harness/reconcile';
-import { createSentinelDir, removeSentinelDir, spawnWorker, pollUntil, killAndWait } from './harness/workerProcess';
+import {
+  createSentinelDir,
+  removeSentinelDir,
+  spawnWorker,
+  pollUntil,
+  killAndWait,
+  waitForWorkerEvent,
+  waitForSentinel,
+} from './harness/workerProcess';
 
 let orm: MikroORM;
 let client: SQSClient;
@@ -38,22 +53,31 @@ afterAll(async () => {
 
 const uuid = () => crypto.randomUUID();
 
-function wagerEvent(params: { messageId: string; playerId: string; walletId: string; kind: 'BET'; amount: string }) {
+function wagerEvent(params: {
+  messageId: string;
+  playerId: string;
+  walletId: string;
+  kind: 'BET';
+  amount: string;
+}) {
   const externalTransactionId = `bet-${uuid()}`;
   const data = {
-    providerId: 'retry-dlq-test', externalTransactionId, idempotencyKey: `retry-dlq-test:${externalTransactionId}`,
-    playerId: params.playerId, walletId: params.walletId, roundId: 'r-1', gameId: 'g-1',
-    kind: params.kind, money: { amount: params.amount, currency: 'BRL' },
+    providerId: 'retry-dlq-test',
+    externalTransactionId,
+    idempotencyKey: `retry-dlq-test:${externalTransactionId}`,
+    playerId: params.playerId,
+    walletId: params.walletId,
+    roundId: 'r-1',
+    gameId: 'g-1',
+    kind: params.kind,
+    money: { amount: params.amount, currency: 'BRL' },
   };
-  return { messageId: params.messageId, type: 'WagerTransactionRequested' as const, occurredAt: new Date().toISOString(), data };
-}
-
-async function messageInQueue(queueUrl: string, targetMessageId: string): Promise<boolean> {
-  const received = await client.send(new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 10, WaitTimeSeconds: 1, VisibilityTimeout: 1 }));
-  return (received.Messages ?? []).some((m) => m.Body && isJson(m.Body) && JSON.parse(m.Body).messageId === targetMessageId);
-}
-function isJson(value: string): boolean {
-  try { JSON.parse(value); return true; } catch { return false; }
+  return {
+    messageId: params.messageId,
+    type: 'WagerTransactionRequested' as const,
+    occurredAt: new Date().toISOString(),
+    data,
+  };
 }
 
 describe('E — retry/backoff do consumidor e chegada à DLQ (SQS real)', () => {
@@ -63,44 +87,77 @@ describe('E — retry/backoff do consumidor e chegada à DLQ (SQS real)', () => 
   // worker-sigterm.test.ts: resíduo de processos/estado entre cenários pesados no mesmo arquivo).
   test('rejeição normal de negócio (saldo insuficiente) é registrada e confirmada — nunca vai para a DLQ', async () => {
     const playerId = uuid();
-    const wallet = await new WalletService(orm.em.fork()).create(playerId, { amount: '5.00', currency: 'BRL' });
+    const wallet = await new WalletService(orm.em.fork()).create(playerId, {
+      amount: '5.00',
+      currency: 'BRL',
+    });
     const messageId = uuid();
-    const event = wagerEvent({ messageId, playerId, walletId: wallet.id, kind: 'BET', amount: '999.00' });
+    const event = wagerEvent({
+      messageId,
+      playerId,
+      walletId: wallet.id,
+      kind: 'BET',
+      amount: '999.00',
+    });
 
     const sentinelDir = await createSentinelDir();
-    const worker = spawnWorker({ env: { TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1' } });
+    const worker = spawnWorker({
+      env: { TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1' },
+    });
     try {
       await submitMessage(client, urls.input, event);
-      const settled = await pollUntil(async () => {
-        const row = await orm.em.fork().findOne(WagerRow, { idempotencyKey: event.data.idempotencyKey });
-        return row?.status === 'REJECTED';
-      }, 20000, 300);
+      const settled = await pollUntil(
+        async () => {
+          const row = await orm.em
+            .fork()
+            .findOne(WagerRow, { idempotencyKey: event.data.idempotencyKey });
+          return row?.status === 'REJECTED';
+        },
+        20000,
+        300,
+      );
       expect(settled).toBe(true);
+      expect((await waitForWorkerEvent(worker, 'sqs_processed', messageId)).status).toBe(
+        'REJECTED',
+      );
     } finally {
       await killAndWait(worker, 'SIGTERM');
       await removeSentinelDir(sentinelDir);
     }
 
-    const row = await orm.em.fork().findOneOrFail(WagerRow, { idempotencyKey: event.data.idempotencyKey });
+    const row = await orm.em
+      .fork()
+      .findOneOrFail(WagerRow, { idempotencyKey: event.data.idempotencyKey });
     expect(row.failureCode).toBe('INSUFFICIENT_BALANCE');
     // Confirmada (ack) normalmente pelo consumer — nunca chega na fila real de DLQ.
-    expect(await messageInQueue(urls.input, messageId)).toBe(false);
-    expect(await messageInQueue(urls.dlq, messageId)).toBe(false);
+    // ACK is proved by sqs_processed, emitted only after DeleteMessage resolves.
+    await assertQueueEmpty(client, urls.dlq);
     // Rejeição de negócio não move saldo nem gera lançamento (seção 7 do desafio).
     await assertBalanceMatchesLedger(orm.em, wallet.id, '5.00');
   }, 60000);
 
   test('falha transitória controlada: retry com backoff real, depois recupera e processa normalmente', async () => {
     const playerId = uuid();
-    const wallet = await new WalletService(orm.em.fork()).create(playerId, { amount: '100.00', currency: 'BRL' });
+    const wallet = await new WalletService(orm.em.fork()).create(playerId, {
+      amount: '100.00',
+      currency: 'BRL',
+    });
     const messageId = uuid();
-    const event = wagerEvent({ messageId, playerId, walletId: wallet.id, kind: 'BET', amount: '10.00' });
+    const event = wagerEvent({
+      messageId,
+      playerId,
+      walletId: wallet.id,
+      kind: 'BET',
+      amount: '10.00',
+    });
 
     const sentinelDir = await createSentinelDir();
     const worker = spawnWorker({
       env: {
-        TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1',
-        TEST_FAULT_INJECT_MESSAGE_ID: messageId, TEST_FAULT_INJECT_MODE: 'once',
+        TEST_SYNC_SENTINEL_DIR: sentinelDir,
+        WORKER_POLL_SECONDS: '1',
+        TEST_FAULT_INJECT_MESSAGE_ID: messageId,
+        TEST_FAULT_INJECT_MODE: 'once',
       },
     });
     try {
@@ -108,11 +165,26 @@ describe('E — retry/backoff do consumidor e chegada à DLQ (SQS real)', () => 
       // A 1ª tentativa falha de propósito (injeção); o worker classifica como transitório e reagenda
       // via ChangeMessageVisibility real — depois disso, a MESMA mensagem é entregue de novo e,
       // dessa vez, processada de verdade (o hook só falha uma vez, modo 'once').
-      const recovered = await pollUntil(async () => {
-        const row = await orm.em.fork().findOne(WagerRow, { idempotencyKey: event.data.idempotencyKey });
-        return row?.status === 'PROCESSED';
-      }, 60000, 500);
+      const recovered = await pollUntil(
+        async () => {
+          const row = await orm.em
+            .fork()
+            .findOne(WagerRow, { idempotencyKey: event.data.idempotencyKey });
+          return row?.status === 'PROCESSED';
+        },
+        60000,
+        500,
+      );
       expect(recovered).toBe(true);
+      expect((await waitForWorkerEvent(worker, 'sqs_retry', messageId)).attempt).toBe(1);
+      await waitForWorkerEvent(worker, 'sqs_processed', messageId);
+      const firstFile = await waitForSentinel(sentinelDir, 'receive-1', 10000);
+      const secondFile = await waitForSentinel(sentinelDir, 'receive-2', 10000);
+      const first = await Bun.file(`${sentinelDir}/${firstFile}`).json();
+      const second = await Bun.file(`${sentinelDir}/${secondFile}`).json();
+      expect(first.count).toBe(1);
+      expect(second.count).toBe(2);
+      expect(second.receivedAt - first.receivedAt).toBeGreaterThanOrEqual(1900);
     } finally {
       await killAndWait(worker, 'SIGTERM');
       await removeSentinelDir(sentinelDir);
@@ -121,10 +193,10 @@ describe('E — retry/backoff do consumidor e chegada à DLQ (SQS real)', () => 
     await assertBalanceMatchesLedger(orm.em, wallet.id, '90.00');
     const debits = await orm.em.fork().find(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' });
     expect(debits).toHaveLength(1); // a tentativa que falhou não deixou nenhum efeito financeiro parcial.
-    expect(await messageInQueue(urls.input, messageId)).toBe(false);
+    // ACK is proved by sqs_processed, emitted only after DeleteMessage resolves.
     // Checa especificamente que ESTA mensagem não foi parar na DLQ — não que a DLQ está vazia no
     // geral (ela pode legitimamente ter resíduo de outros cenários/execuções anteriores).
-    expect(await messageInQueue(urls.dlq, messageId)).toBe(false);
+    await assertQueueEmpty(client, urls.dlq);
   }, 90000);
 
   // O cenário de falha PERSISTENTE (esgota as 5 tentativas reais até a DLQ) está em
@@ -133,18 +205,38 @@ describe('E — retry/backoff do consumidor e chegada à DLQ (SQS real)', () => 
 
   test('mensagem permanentemente inválida (JSON quebrado) vai direto para a DLQ, sem consumir o orçamento de retries', async () => {
     const sentinelDir = await createSentinelDir();
-    const worker = spawnWorker({ env: { TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1' } });
+    const worker = spawnWorker({
+      env: { TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1' },
+    });
     const malformedId = `malformed-${uuid()}`; // usado só como correlação manual nos logs; não é lido pelo parser.
     try {
-      await client.send(new SendMessageCommand({
-        QueueUrl: urls.input, MessageBody: `{"not valid json ${malformedId}`,
-        MessageGroupId: 'malformed-group', MessageDeduplicationId: malformedId,
-      }));
-      const reachedDlq = await pollUntil(async () => {
-        const received = await client.send(new ReceiveMessageCommand({ QueueUrl: urls.dlq, MaxNumberOfMessages: 10, WaitTimeSeconds: 1, VisibilityTimeout: 1 }));
-        return (received.Messages ?? []).some((m) => m.Body?.includes(malformedId));
-      }, 20000, 300);
-      expect(reachedDlq).toBe(true); // rápido — vai direto, sem esperar 5 tentativas.
+      await client.send(
+        new SendMessageCommand({
+          QueueUrl: urls.input,
+          MessageBody: `{"not valid json ${malformedId}`,
+          MessageGroupId: 'malformed-group',
+          MessageDeduplicationId: malformedId,
+        }),
+      );
+      const reachedDlq = await pollUntil(
+        async () => {
+          const received = await client.send(
+            new ReceiveMessageCommand({
+              QueueUrl: urls.dlq,
+              MaxNumberOfMessages: 10,
+              WaitTimeSeconds: 1,
+              VisibilityTimeout: 1,
+            }),
+          );
+          return (received.Messages ?? []).some((m) => m.Body?.includes(malformedId));
+        },
+        20000,
+        300,
+      );
+      expect(reachedDlq).toBe(true);
+      const observed = await waitForWorkerEvent(worker, 'sqs_dead_lettered');
+      expect(observed.attempt).toBe(1);
+      expect(observed.errorCode).toBe('INVALID_SQS_JSON');
     } finally {
       await killAndWait(worker, 'SIGTERM');
       await removeSentinelDir(sentinelDir);

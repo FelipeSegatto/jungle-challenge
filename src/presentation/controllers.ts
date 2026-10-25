@@ -1,6 +1,16 @@
 import {
-  Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe,
-  Post, Query, Res, ServiceUnavailableException, UseGuards,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Res,
+  ServiceUnavailableException,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { EntityManager } from '@mikro-orm/postgresql';
@@ -60,7 +70,9 @@ export class WageringController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.wagers.process(command, key ?? '');
-    response.status(result.status === 'PENDING_REFERENCE' ? 202 : result.status === 'REJECTED' ? 422 : 200);
+    response.status(
+      result.status === 'PENDING_REFERENCE' ? 202 : result.status === 'REJECTED' ? 422 : 200,
+    );
     return result;
   }
 
@@ -92,7 +104,9 @@ export class HealthController {
   ) {}
 
   @Get('live')
-  live() { return { status: 'ok' }; }
+  live() {
+    return { status: 'ok' };
+  }
 
   @Get('ready')
   async ready() {
@@ -101,7 +115,10 @@ export class HealthController {
       await this.sqs.check();
       return { status: 'ok', dependencies: { postgres: 'ok', sqs: 'ok' } };
     } catch {
-      throw new ServiceUnavailableException({ code: 'DEPENDENCY_UNAVAILABLE', status: 'not_ready' });
+      throw new ServiceUnavailableException({
+        code: 'DEPENDENCY_UNAVAILABLE',
+        status: 'not_ready',
+      });
     }
   }
 

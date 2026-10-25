@@ -249,17 +249,21 @@ Isso, por si só, garante imutabilidade na camada de aplicação, mas não imped
 
 ## 13. Validação executada
 
-Esta implementação foi de fato compilada e testada com Bun, PostgreSQL e LocalStack em execução — não é uma expectativa para quem for rodar depois, é um resultado já observado nesta sessão de trabalho:
+A validação usa Bun 1.4.4, TypeScript estrito, PostgreSQL e LocalStack reais. O comando `bun run test:all` cria infraestrutura exclusiva e três APIs; não depende dos serviços da demonstração. `bun run test:isolated <suíte...>` seleciona uma parte com a mesma preparação e limpeza.
 
-- `bun run typecheck` — limpo (TypeScript estrito, sem `any`/`ts-ignore`).
-- `bun run test` (Money/Wallet/`payloadHash`) — 16/16.
-- `bun run test:integration` (HTTP + PostgreSQL reais, 13 testes) — 13/13, incluindo os 5 cenários de `Idempotency-Key` reusada com `amount`/`playerId`/`walletId` divergentes.
-- `bun run test:references` (referências fora de ordem) — 3/3, incluindo a regressão permanente de `WIN` referenciando `BET` com valor diferente, nos dois sentidos de chegada.
-- `bun run test:messaging` (Inbox/Outbox/DLQ contra LocalStack real) — 3/3, reexecutado 8x consecutivas sem falha; o teste de publishers concorrentes força uma falha real de `SendMessageCommand` (fila inexistente, não mock) e prova recuperação via backoff até publicação completa dentro de um deadline controlado.
-- `bun run test:race` e `bun run test:3instances` — cenário obrigatório da seção 8 (100,00 → duas `BET`s de 80,00) reproduzido com 3 processos HTTP independentes reais: uma `PROCESSED`, uma `REJECTED`, saldo final correto, um único lançamento de débito, reconciliação consistente.
-- Migrations `up → down → down → up → pending` em banco descartável — reversíveis, sem pendências ao final.
+| Grupo | Evidência |
+|---|---|
+| Domínio | Money/Wallet/hash, direções e transições de Wager, OPENING interno, Inbox/Outbox e proteção dos destinos de teste |
+| Operações e constraints | OPENING, BET/WIN/LOSS/REFUND/ROLLBACK, replay histórico, conflito de chave e imutabilidade do ledger |
+| Atomicidade integral | Falha real de INSERT na Outbox durante o caso de uso: rollback da wallet, transação, ledger e inbox; remoção da falha e retry com um único efeito |
+| Concorrência | Disputa 80+80, 50 duplicatas, seis wallets paralelas e três processos HTTP independentes |
+| Recuperação | Worker morto após commit antes do ACK; outro worker recebe a entrega número 2; API encerrada e substituída; eventos da Outbox recebidos e comparados no SQS |
+| Shutdown | SIGTERM com mensagem em andamento, ACK depois do commit, `worker_stopped` e saída 0 dentro do prazo |
+| Retry e DLQ | Contagens 1–5 e backoff observados, redrive real, mensagem inválida na tentativa 1 e rejeição de negócio confirmada normalmente |
 
-A integridade de `Money` e os limites de valor são validados no domínio e no schema; a fronteira de autenticação é um no-op documentado (seção 2 deste documento).
+A validação passou nos 55 testes do backend e nos dois scripts de corrida, incluindo atomicidade integral e rejeição de destinos HTTP inseguros. O registro da execução está em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). Os números representam execuções observadas e não substituem repetir a validação antes da entrega.
+
+A invariante financeira é conferida contra o ledger e contra o saldo esperado, não apenas contra um booleano retornado pela API. O teste de atomicidade injeta a falha em PostgreSQL real, limitada à wallet daquele teste, e remove seu trigger no `finally`.
 
 ---
 
@@ -286,12 +290,23 @@ Não existe dashboard gráfico nem OpenTelemetry distribuído (seção 12). Não
 
 A verificação de `Idempotency-Key` roda antes de qualquer validação dependente da wallet (seção 6 deste documento), mas depende do payload já ter passado pela validação de forma (seção 6, último parágrafo) — um payload estruturalmente inválido nunca chega a gerar `409`, mesmo reusando uma key já conhecida.
 
-A transação `OPENING` (abertura de wallet com saldo inicial) é montada como um registro direto em `WalletService.create()`, sem passar pela factory `WagerTransaction.create()` — um atalho de implementação para um caminho estritamente interno (não alcançável via API/fila, seção 6.3 do desafio: "`OPENING` é interno: não pode ser submetido pela API nem pela fila"), mas que foge, no sentido literal, da regra de modelagem da seção 6.0 ("toda transação nasce pela factory").
+A transação `OPENING` usa `WagerTransaction.opening()`, uma factory interna que gera a identidade e o estado processado da abertura. A factory pública `create()` e os DTOs rejeitam OPENING. As linhas ORM são mapeamentos de persistência; Inbox/Outbox também possuem factories e transições de domínio.
 
 O guard de autenticação é um no-op (seção 2 deste documento) — qualquer chamador pode se declarar como qualquer `providerId`, sem verificação de identidade.
 
 A transação de claim da Outbox mantém lock de linha durante a chamada de rede ao SQS (seção 10 deste documento) — aceitável no volume deste desafio, primeiro ponto a reconsiderar sob carga muito maior.
 
-Não há teste automatizado simulando um `SIGTERM` real do worker durante uma chamada de rede em andamento — o comportamento esperado (o ciclo atual termina antes do loop checar o sinal de novo) está implementado em `src/worker-main.ts`, mas não exercitado por um teste que mate o processo de fato no meio de uma operação.
+O teste `worker-sigterm.test.ts` envia SIGTERM com uma mensagem em andamento e exige conclusão, ACK e saída limpa. O cenário de SIGKILL após commit é verificado separadamente. Interrupções em todos os pontos de rede e orçamento global de shutdown sob falhas prolongadas permanecem possibilidades de ampliação; não são declaradas como já testadas.
 
 Migrations são `Migration202610230001` (schema base) e `Migration202610240002` (constraints compostas adicionais), ambas com `up()` e `down()` reversíveis. A segunda não edita o histórico já aplicado pela primeira — qualquer ajuste de constraint depois da primeira migration em produção deveria sempre ser uma migration nova, nunca uma edição retroativa de uma já aplicada.
+
+
+## 16. Isolamento e reprodução dos testes
+
+O runner `scripts/test-isolated.ts` cria infraestrutura e três APIs exclusivas por execução, com prefixo de filas por suíte e banco temporário. A suíte não usa purge na fila da aplicação. Os guards validam banco e SQS locais, `BASE_URL` explícito e `BASE_URLS` com três origens HTTP locais distintas; rejeitam credenciais embutidas, caminhos, query e fragmento. Os scripts standalone também validam suas origens antes de qualquer requisição. Os detalhes e os limites da evidência estão em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md).
+
+Replays SQS passam pela validação do hash de inbox e registram a mensagem mesmo quando a operação financeira foi inicialmente HTTP. O registro usa INSERT ON CONFLICT na transação do EntityManager e valida o envelope vencedor; saldo, ledger e outbox não são reaplicados. Constraints e contratos HTTP permanecem os mesmos.
+
+ACK é verificado após DeleteMessage responder. O teste de reinício encerra a API que recebeu a operação, inicia outra e compara o replay, além de receber os envelopes reais publicados pela outbox. O teste SIGTERM exige saída graciosa, com ACK e worker_stopped. Inbox/Outbox têm modelos de domínio com factories e transições; OPENING usa factory interna.
+
+A gauge wagering_dlq_messages observa backlog, incluindo redrive automático, e complementa o contador de envios diretos wagering_dlq_total. O Dockerfile usa lockfile congelado e Bun 1.4.4. A dependência transitiva multer é fixada em 2.5.0 por override para corrigir o advisory conhecido.

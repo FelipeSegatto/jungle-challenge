@@ -4,11 +4,20 @@ import { SqsHealth } from './infrastructure/sqs/health';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import config from '../mikro-orm.config';
 import { WalletService, WagerService, QueryService } from './application/services';
-import { WalletsController, WageringController, ProviderTransactionsController, HealthController } from './presentation/controllers';
+import {
+  WalletsController,
+  WageringController,
+  ProviderTransactionsController,
+  HealthController,
+} from './presentation/controllers';
 @Module({
-    imports: [MikroOrmModule.forRoot(config)],
-    controllers: [WalletsController, WageringController, ProviderTransactionsController, HealthController],
-    providers: [WalletService, WagerService, QueryService, NoopAuthGuard, SqsHealth],
+  imports: [MikroOrmModule.forRoot(config)],
+  controllers: [
+    WalletsController,
+    WageringController,
+    ProviderTransactionsController,
+    HealthController,
+  ],
+  providers: [WalletService, WagerService, QueryService, NoopAuthGuard, SqsHealth],
 })
-export class AppModule {
-}
+export class AppModule {}

@@ -124,19 +124,25 @@ Por que a regra de negócio não pode ficar concentrada no controller: o control
 
 ---
 
+## Validação segura do backend
+
+Use Bun 1.4.4 e execute `bun install --frozen-lockfile`, `bun run typecheck` e `bun run test:all` na raiz. A suíte completa cria PostgreSQL, LocalStack, banco, filas e APIs exclusivos e remove seus próprios recursos ao terminar; não precisa parar a demonstração. Para selecionar suítes: `bun run test:isolated test:crash-recovery test:sigterm`.
+
+O [roteiro de validação do backend](docs/BACKEND_VALIDATION.md) relaciona comandos, resultados esperados, requisitos, isolamento e limitações. Os scripts individuais de integração agora recusam destinos que não sejam explicitamente de teste. Para testar sem Docker, `bun run test` executa as unidades.
+
 ## Como executar localmente
 
 ### Pré-requisitos
 
 - Docker Desktop (ou Docker Engine + Compose) rodando.
-- [Bun](https://bun.sh) 1.x instalado no host, se você quiser rodar testes ou a API fora do container.
+- [Bun](https://bun.sh) 1.4.4 instalado no host, se você quiser rodar testes ou a API fora do container.
 - PowerShell (os exemplos abaixo são para Windows; os comandos de `bun`/`docker` funcionam iguais em Bash).
 
 ### Opção 1 — Tudo no Docker Compose (mais simples)
 
 ```powershell
 Copy-Item .env.example .env
-bun install
+bun install --frozen-lockfile
 docker compose up -d --build
 docker compose ps
 ```
@@ -157,7 +163,7 @@ Para rodar a API diretamente com Bun no Windows (útil para depurar com breakpoi
 
 ```powershell
 Copy-Item .env.example .env
-bun install
+bun install --frozen-lockfile
 docker compose up -d postgres localstack
 bun run migration:up
 bun run queues:init
@@ -193,15 +199,23 @@ Nunca misture os dois modos nas mesmas portas — ou a API do Compose, ou a do h
 | `bun run typecheck` | `tsc --noEmit`, TypeScript estrito |
 | `bun run migration:up` / `migration:down` / `migration:pending` | Aplica, reverte ou lista migrations via MikroORM CLI |
 | `bun run queues:init` | Cria as 3 filas SQS no LocalStack (`scripts/init-queues.ts`) |
-| `bun run test` | Testes puros de domínio: `Money`, `Wallet`, `payloadHash` — sem banco |
+| `bun run test` | Domínio, transições de Wager/Inbox/Outbox, hash e proteção dos destinos de teste — sem banco |
 | `bun run test:integration` | HTTP + PostgreSQL reais (`test/integration.test.ts`) |
 | `bun run test:messaging` | PostgreSQL + LocalStack reais: inbox, outbox, DLQ, redelivery (`test/messaging.test.ts`) |
 | `bun run test:references` | Referências fora de ordem (`test/references.test.ts`) |
 | `bun run test:race` | Script standalone: 2 BETs concorrentes + 50x replay via HTTP (`scripts/race.ts`) |
 | `bun run test:3instances` | Mesmo cenário, mas contra 3 processos HTTP independentes (`scripts/race-three.ts`) |
-| `bun run test:all` | Roda tudo acima, em sequência (precisa da API e dos containers de pé) |
+| `bun run test:all` | Cria PostgreSQL/LocalStack e três APIs exclusivos, executa todas as suítes e remove seus recursos; precisa de Docker Engine e Bun, sem API previamente iniciada |
+| `bun run test:isolated <suíte...>` | Seleciona suítes com o mesmo isolamento; exemplo: `bun run test:isolated test:atomicity test:crash-recovery` |
+| `bun run test:atomicity` | Executor interno: falha real de INSERT na Outbox, rollback integral e retry seguro (`test/atomicity.test.ts`) |
+| `bun run test:inbox-replay` | Executor interno: HTTP→SQS, inbox única e conflitos concorrentes de envelope |
+| `bun run test:parallel-wallets` | Executor interno: seis wallets com operações paralelas e reconciliação por wallet |
+| `bun run test:crash-recovery` / `test:sigterm` | Executores internos: SIGKILL, reentrega, reinício da API e encerramento gracioso |
+| `bun run test:consumer-retry` / `test:consumer-dlq-persistent` | Executores internos: retry/backoff observado e redrive real até a DLQ |
 | `bun run demo:sqs` | Demonstração ponta a ponta via SQS (`scripts/demo-sqs.ts`) |
 | `bun run format` / `format:check` | Prettier |
+
+Os executores individuais de integração são usados pelo runner. Para executá-los com segurança, prefira `bun run test:isolated <suíte>`: o guard exige banco de teste, SQS local e origens HTTP locais explícitas. Os scripts standalone de corrida também recusam destinos remotos ou ausentes; para três instâncias, exigem três origens locais distintas. O runner preenche essas configurações automaticamente.
 
 ### Troubleshooting
 
@@ -227,6 +241,7 @@ jungle-wagering/
 │   │   ├── wallet.ts              # Aggregate Root Wallet
 │   │   ├── wager.ts                # WagerTransaction (estados e transições)
 │   │   ├── ledger.ts              # WalletLedgerEntry (imutável)
+│   │   ├── messaging.ts             # Factories e transições de InboxMessage/OutboxMessage
 │   │   ├── events.ts              # IntegrationEvent + 4 eventos concretos
 │   │   ├── hash.ts                # canonicalJson + payloadHash (idempotência)
 │   │   └── errors.ts              # DomainError (code + httpStatus)
@@ -248,7 +263,7 @@ jungle-wagering/
 │   ├── main.ts                     # Bootstrap da API
 │   └── worker-main.ts              # Bootstrap do worker (consumer + outbox + referências)
 ├── test/                           # Unidade, integração, mensageria, referências
-├── scripts/                        # race.ts, race-three.ts, demo-sqs.ts, init-queues.ts, demo.ps1
+├── scripts/                        # test-isolated.ts, test-targets.ts, races e demonstrações
 ├── docker-compose.yml
 ├── mikro-orm.config.ts
 ├── ARCHITECTURE.md
@@ -261,7 +276,7 @@ Alguns arquivos merecem contexto além do nome:
 
 **`src/domain/wallet.ts`** — É o Aggregate Root da seção 6.2 do desafio. Faz: `Wallet.open()` cria com `version=1`; `debit()`/`credit()` validam moeda e valor positivo, e `debit()` lança `INSUFFICIENT_BALANCE` se o saldo não cobrir o valor; cada operação que move saldo incrementa `_version`. Existe porque a wallet é a unidade de concorrência do sistema inteiro (seção 8 do desafio) — é nela, e não numa tabela global, que o lock pessimista é tomado. Interage com `WagerService.process()`, que chama `debit()`/`credit()` depois de travar a linha da wallet no banco.
 
-**`src/domain/wager.ts`** — A transação financeira em si (`WagerTransaction`). Faz: nasce em `PENDING` via `create()` (que já valida se `REFUND`/`ROLLBACK` tem referência e se `BET`/`LOSS` não tem); expõe `ledgerDirectionFor()`, que decide se a operação é `DEBIT` ou `CREDIT` olhando o próprio `kind` e, para `ROLLBACK`, o `kind` da transação referenciada; `markProcessed()`/`reject()`/`fail()` são transições que lançam erro se chamadas sobre um estado terminal. Existe para que "isso pode mudar de estado" não seja uma pergunta espalhada por `if`s no serviço de aplicação — é uma pergunta que a própria classe responde (`isTerminal()`). Interage com `WalletLedgerEntry` (para saber a direção do lançamento) e é persistida como `WagerRow`.
+**`src/domain/wager.ts`** — A transação financeira em si (`WagerTransaction`). Faz: nasce em `PENDING` via `create()` (que já valida se `REFUND`/`ROLLBACK` tem referência e se `BET`/`LOSS` não tem); expõe `ledgerDirectionFor()`, que decide se a operação é `DEBIT` ou `CREDIT` olhando o próprio `kind` e, para `ROLLBACK`, o `kind` da transação referenciada; `markProcessed()`/`reject()`/`fail()` são transições que lançam erro se chamadas sobre um estado terminal. Existe para que "isso pode mudar de estado" não seja uma pergunta espalhada por `if`s no serviço de aplicação — é uma pergunta que a própria classe responde (`isTerminal()`). A abertura usa a factory interna `opening()`, que nasce processada; `create()` rejeita OPENING. Interage com `WalletLedgerEntry` (para saber a direção do lançamento) e é persistida como `WagerRow`.
 
 **`src/domain/ledger.ts`** — `WalletLedgerEntry`, o lançamento. Faz: `create()` recebe `balanceBefore`, `money`, `direction` e `balanceAfter`, e **recusa** se a conta não fechar (`balanceBefore ± money !== balanceAfter`) — a verificação está na factory, não é opcional. Existe porque o ledger é a fonte de verdade auditável; o saldo da wallet é só um cache dessa soma. Interage com `WagerService`, que cria um lançamento por transação processada que move saldo (nunca para `LOSS`, nunca para rejeitadas).
 
@@ -270,6 +285,8 @@ Alguns arquivos merecem contexto além do nome:
 **`src/infrastructure/entities/rows.ts`** — As entidades do MikroORM (`WalletRow`, `WagerRow`, `LedgerRow`, `OutboxRow`, `InboxRow`). Importante: **isso não é o domínio**. `WalletRow.balance` é uma `string` mapeada como `numeric(20,2)`; é `services.ts` que converte isso para `Money`/`Wallet` (`Wallet.rehydrate()`) antes de aplicar qualquer regra, e converte de volta antes de persistir. Separar os dois evita que uma decoração do ORM (`@Property`) vire, por acidente, uma regra de negócio.
 
 **Controllers (`presentation/controllers.ts`)** — Tecnicamente finos: cada método extrai o DTO, chama o serviço de aplicação e ajusta o status HTTP (ex.: `WageringController.process` devolve 202 se `PENDING_REFERENCE`, 422 se `REJECTED`, 200 nos demais casos). Nenhuma regra financeira aparece aqui.
+
+**`src/domain/messaging.ts`** — `InboxMessage.receive()` registra a identidade de entrega e `markProcessed()` conclui seu processamento. `OutboxMessage.enqueue()` recebe um evento de integração; `markPublished()` e `scheduleRetry()` encapsulam conclusão e backoff. A persistência converte essas classes para as linhas ORM, sem introduzir dependência do banco no domínio.
 
 **`infrastructure/workers/consumer.ts`** — `consumeOnce()`: lê até 5 mensagens da fila de entrada, valida o envelope e o DTO, chama `WagerService.process()` passando um contexto de Inbox, e só manda `DeleteMessageCommand` (ACK) depois que essa chamada retorna — ou seja, depois que o Postgres já confirmou o commit. Erros de negócio (4xx conhecidos) viram DLQ direto; erros transitórios (5xx, timeout) alteram a visibilidade da mensagem com backoff exponencial e deixam o SQS reentregar.
 
@@ -629,18 +646,21 @@ flowchart TD
 
 **Outbox** (`outbox_messages`) — Eventos de integração (`WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged`, `WagerTransactionPendingReference`) são gravados na **mesma transação SQL** da operação financeira. `publishOutboxBatch()` roda depois, numa transação separada e curta, e só manda pro SQS o que já foi commitado. Isso existe porque publicar durante a operação financeira criaria uma janela onde o evento sai mas a transação pode ainda dar rollback — o desafio proíbe isso explicitamente (seção 5): "não publicar eventos antes do commit da transação financeira".
 
-**DLQ** — Mensagens com erro permanente de negócio conhecido (ex.: JSON malformado, DTO inválido) vão direto pra DLQ, sem consumir as 5 tentativas de redrive. Erros de negócio normais (ex.: `INSUFFICIENT_BALANCE`) **não** vão pra DLQ — são `REJECTED` com ACK, porque é um resultado válido, não uma falha.
+**DLQ** — Mensagens com erro permanente de contrato (ex.: JSON malformado, DTO inválido) vão direto pra DLQ, sem consumir as 5 tentativas de redrive. Erros de negócio normais (ex.: `INSUFFICIENT_BALANCE`) **não** vão pra DLQ — são `REJECTED` com ACK, porque é um resultado válido, não uma falha.
 
 **Retry** — Dois backoffs independentes, ambos exponenciais e limitados a 60s: um para a visibilidade da mensagem SQS quando o erro é transitório (`consumer.ts`), outro para a publicação da Outbox quando o `SendMessageCommand` falha (`outbox.ts`, campos `attempts`/`nextAttemptAt`).
 
 | Ponto da falha | O que pode acontecer | Como o sistema recupera | Onde está testado |
 |---|---|---|---|
-| Processo cai depois do commit, antes do ACK | Mensagem é reentregue | Inbox + `idempotencyKey` reconhecem a redelivery; nenhum novo débito | `test/messaging.test.ts` — "redelivery após commit antes do ACK não duplica débito" |
+| Processo cai depois do commit, antes do ACK | Mensagem é reentregue | Outro worker recebe a entrega número 2; Inbox e chave persistentes evitam novo débito | `test/worker-crash-recovery.test.ts` — SIGKILL real no ponto pós-commit/pré-ACK |
 | `SendMessageCommand` da Outbox falha (fila fora do ar, timeout) | Evento fica pendente | `attempts++`, `nextAttemptAt` com backoff; próximo ciclo do worker tenta de novo | `test/messaging.test.ts` — "outbox recupera de falha transitória de publicação", que força uma falha real (fila inexistente) e prova republicação dentro de um deadline |
 | Dois publishers reivindicam a Outbox ao mesmo tempo | Nenhum, se o `SKIP LOCKED` funcionar — cada linha pendente é reivindicada por exatamente um dos dois | `claimed1 + claimed2` bate exatamente com o total pendente no instante da corrida | `test/messaging.test.ts` — "dois publishers concorrentes dividem a outbox sem reivindicar a mesma linha duas vezes" |
 | Mensagem publicada duas vezes no SQS (ex.: `publishedAt` não gravado a tempo antes de um crash do worker) | Consumidor externo recebe o evento 2x | `eventId` é estável — o consumidor externo precisa deduplicar por ele; o sistema **não promete exactly-once** | Não há consumidor externo real neste repositório para testar — ver [Limitações](#limitações-e-próximos-passos) |
 | Referência (`BET`) ainda não chegou | Operação fica `PENDING_REFERENCE` | Worker de referências reprocessa com backoff até achar ou esgotar tentativas | `test/references.test.ts` |
-| Worker encerrado (SIGTERM) | — | O ciclo atual (`publishOutboxBatch` + `retryReferences` + `consumeOnce`) termina antes do loop checar o sinal de novo; mensagens em voo não são cortadas no meio | `src/worker-main.ts` — não há teste automatizado de SIGTERM real neste repositório |
+| Worker encerrado (SIGTERM) | Há uma mensagem em andamento | O ciclo termina, confirma o ACK e encerra limpo dentro do prazo | `test/worker-sigterm.test.ts` — processo real, `sqs_processed`, `worker_stopped` e saída 0 |
+| INSERT na Outbox falha antes do commit | Parte da operação já foi preparada no caso de uso | PostgreSQL reverte saldo, versão, wager, ledger e inbox; retry posterior aplica uma vez | `test/atomicity.test.ts` — trigger restrito à wallet do teste |
+| API reinicia após a operação | Processo anterior não existe mais | Nova API devolve o replay; worker publica envelopes pendentes reais | `test/worker-crash-recovery.test.ts` — PIDs distintos e comparação dos envelopes recebidos |
+| Falha transitória persiste | Mensagem chega ao limite de tentativas | RedrivePolicy move à DLQ após as cinco recepções observadas | `test/consumer-dlq-persistent.test.ts` |
 | Tentativas de referência esgotadas | Operação ficaria pendente para sempre | `REJECTED`/`REFERENCE_NOT_FOUND`, evento publicado, permanece auditável (nunca é deletada) | `test/references.test.ts` — "ausência de referência termina em REJECTED e permanece auditável" |
 
 Importante dizer com essas palavras: o sistema entrega mensagens **at-least-once**, nunca exactly-once. A garantia real não é "a mensagem chega uma vez" — é "o efeito financeiro é aplicado uma vez", que é uma coisa diferente e mais forte, resolvida no Postgres (idempotência + lock), não no broker.
@@ -835,31 +855,43 @@ Não é uma lista fechada no enunciado, mas é a taxonomia real usada em `Domain
 
 ## Testes e evidências
 
-| Suíte | Comando | O que testa | Risco coberto |
+Na raiz do repositório, com Bun 1.4.4 e Docker Engine disponíveis:
+
+```bash
+bun install --frozen-lockfile
+bun run format:check
+bun run typecheck
+bun run test:all
+```
+
+A suíte completa cria seus próprios containers, banco, filas e três processos HTTP. Não precisa da aplicação de demonstração rodando e não purga suas filas. O banco descartável é mantido enquanto as APIs/workers reiniciam nos testes; o runner remove seus próprios recursos ao terminar. Os comandos abaixo selecionam cenários com o mesmo isolamento:
+
+```bash
+bun run test:isolated test:integration test:atomicity
+bun run test:isolated test:crash-recovery test:sigterm
+bun run test:isolated test:consumer-retry test:consumer-dlq-persistent
+bun run test:isolated test:race test:3instances
+```
+
+| Suíte | Arquivo / executor interno | O que testa | Risco coberto |
 |---|---|---|---|
-| Unidade | `bun run test` | `Money` (precisão, validação, moeda), `Wallet` (saldo, versão), `payloadHash` (hash estável e sensível a cada campo de negócio) — sem banco | Regras de domínio isoladas do resto |
-| Integração | `bun run test:integration` | HTTP + PostgreSQL reais: OPENING, corrida de 2 BETs, 50x replay, WIN/LOSS/REFUND/ROLLBACK, PENDING_REFERENCE, trigger de imutabilidade, rollback de transação, 5 cenários de conflito de idempotência | Correção financeira de ponta a ponta |
-| Mensageria | `bun run test:messaging` | PostgreSQL + LocalStack reais: redelivery sem duplicar, dois publishers concorrentes na Outbox, recuperação de falha real de publicação | Inbox/Outbox/at-least-once |
-| Referências | `bun run test:references` | REFUND antes da BET (resolve depois), referência que nunca chega (REJECTED), WIN/BET em ambas as ordens de chegada | Consistência entre caminho síncrono e assíncrono |
-| Concorrência (standalone) | `bun run test:race` | 2 BETs de R$ 80 concorrentes + 50x replay, via HTTP real | Cenário obrigatório da seção 8 |
-| 3 instâncias (standalone) | `bun run test:3instances` | Mesmo cenário, contra 3 processos independentes (`api1`, `api2`, `api3`) | "Correto só com 1 instância" é falha eliminatória — isso prova que não é o caso |
+| Unidade | `bun run test` | Money, Wallet, hash, transições terminais, direções/referências por tipo, Inbox/Outbox e rejeição de destinos inseguros | Invariantes de domínio e proteção da própria suíte |
+| Integração | `test:integration` | HTTP + PostgreSQL reais: OPENING, operações, corridas, replay histórico, conflitos e constraints | Correção financeira de ponta a ponta |
+| Atomicidade | `test:atomicity` | Trigger restrito à wallet do teste força erro de INSERT na Outbox; confere rollback de wallet, wager, ledger e inbox; remove o erro e repete a operação uma única vez | Commit integral de todas as partes, seção 11 |
+| Mensageria | `test:messaging` | Redelivery sem duplicação, publishers concorrentes e recuperação de falha real de publicação | Inbox/Outbox e entrega at-least-once |
+| Referências | `test:references` | REFUND antes da BET, limite de tentativas e WIN/BET em ambas as ordens | Operações fora de ordem |
+| Wallets distintas | `test:parallel-wallets` | Seis wallets recebem BET e WIN simultaneamente; saldo e ledger conferidos por wallet | Ausência de efeito financeiro cruzado |
+| Inbox em replay | `test:inbox-replay` | Operação inicialmente HTTP chega por SQS; replays concorrentes registram uma inbox; envelope divergente conflita | Deduplicação da mensagem além da chave financeira |
+| Crash/reinício | `test:crash-recovery` | SIGKILL após commit antes do ACK, recepção número 2 em outro worker; API realmente reiniciada, replay preservado e eventos recebidos na fila de saída | Recuperação baseada no estado persistido |
+| SIGTERM | `test:sigterm` | Worker conclui mensagem, confirma ACK e sai com código 0 e `worker_stopped` dentro do prazo | Encerramento gracioso real |
+| Retry/DLQ | `test:consumer-retry`, `test:consumer-dlq-persistent` | Rejeição normal com ACK, falha transitória, JSON inválido e cinco tentativas observadas com backoff até a DLQ real | Classificação de falhas e redrive |
+| Corridas | `test:race`, `test:3instances` | Duas BETs de 80 sobre 100 e operação de 1 enviada 50 vezes; saldo 19, dois débitos e reconciliação, inclusive entre três APIs | Cenário obrigatório da seção 8 e idempotência distribuída |
 
-**Resultados verificados nesta sessão de trabalho**, contra PostgreSQL e LocalStack reais (Docker Compose), não mocks:
+A verificação final é **`wallet.balance == saldo reconstruído pelo ledger`**, junto ao valor esperado de cada cenário. O novo teste de atomicidade confere também a versão da wallet e a ausência de registros parciais nas quatro tabelas relacionadas; após remover o trigger de falha, a mesma chave é processada e seu replay não acrescenta efeitos.
 
-```
-bun run typecheck         -> limpo (TypeScript estrito, sem any/ts-ignore)
-bun run test              -> 16 pass, 0 fail  (Money + Wallet + payloadHash)
-bun run test:integration  -> 13 pass, 0 fail  (71 expect() calls)
-bun run test:references   ->  3 pass, 0 fail  (19 expect() calls)
-bun run test:messaging    ->  3 pass, 0 fail  (22 expect() calls) — repetido 8x em sequência, 0 falhas
-bun run test:race         -> PASS (1 debit de 80+80, 1 debit de 50x replay, ledger consistente)
-bun run test:3instances   -> PASS (mesmo cenário, 3 processos HTTP reais)
-migration up -> down -> down -> up -> pending, em banco descartável -> reversível, sem pendências
-```
+O ACK é observado por um evento emitido depois da resposta de `DeleteMessage`. Uma resposta vazia de `ReceiveMessage` não é usada como prova de remoção: a mensagem poderia estar apenas invisível. Os testes de retry leem as contagens reais de recepção e os intervalos de backoff.
 
-Esses números não são uma meta de cobertura e não substituem rodar a suíte de novo — são o resultado observado ao rodar os comandos acima neste ambiente, nesta data. Se você clonar o repositório, rode os mesmos comandos antes de confiar neles de novo (os containers do Compose precisam estar de pé com as migrations aplicadas).
-
-Invariante final, válida em todos os testes de integração: **`wallet.balance == saldo reconstruído pelo ledger`** — é literalmente o que `POST /wallets/:id/reconciliation` verifica, e é a asserção que fecha os testes de corrida.
+**Resultados de validação:** 55 testes do backend e os dois scripts de race passaram sem falhas, incluindo atomicidade integral e proteção de origens HTTP. `format:check` e typecheck também passaram; consulte o registro atualizado em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). O frontend tem sua validação separada: 37 testes Bun, 55 testes Vitest, typecheck e build. Esses resultados são evidência de execução, não uma promessa de ausência de defeitos; execute novamente os comandos antes de entregar.
 
 ---
 
@@ -876,13 +908,14 @@ Invariante final, válida em todos os testes de integração: **`wallet.balance 
 | `wagering_transactions_total{status}` | Counter | Volume de operações por status final |
 | `wagering_duplicates_total` | Counter | Quantos replays de idempotência aconteceram |
 | `wagering_retries_total{kind}` | Counter | Retries de SQS vs. de referência pendente |
-| `wagering_dlq_total` | Counter | Mensagens que foram direto pra DLQ |
+| `wagering_dlq_total` | Counter | Mensagens enviadas diretamente à DLQ pelo consumidor |
+| `wagering_dlq_messages` | Gauge | Backlog aproximado da DLQ, incluindo mensagens movidas automaticamente pela RedrivePolicy; exposto pelo worker |
 | `wagering_lock_conflicts_total` | Counter | Deadlocks/serialization failures do Postgres |
 | `wagering_processing_seconds` | Histogram | Latência de `WagerService.process()` |
 | `wagering_outbox_oldest_seconds` | Gauge | Idade do evento mais antigo ainda não publicado — o "outbox lag" |
 | `wagering_reconciliation_mismatch_total` | Counter | Divergências encontradas na reconciliação |
 
-Numa investigação real, essas métricas respondem perguntas concretas: `wagering_outbox_oldest_seconds` alto significa que o publisher não está acompanhando o volume de eventos; `wagering_lock_conflicts_total` subindo significa uma hot wallet específica recebendo operações demais ao mesmo tempo; `wagering_dlq_total` subindo significa provedores enviando payloads inválidos, não um problema do sistema.
+Numa investigação real, essas métricas respondem perguntas concretas: `wagering_outbox_oldest_seconds` alto significa que o publisher não está acompanhando o volume de eventos; `wagering_lock_conflicts_total` subindo significa uma hot wallet específica recebendo operações demais ao mesmo tempo; `wagering_dlq_total` subindo indica envios diretos pelo consumidor, enquanto `wagering_dlq_messages` também inclui o redrive automático de falhas persistentes. A gauge é uma fotografia aproximada da fila: não some valores de workers que observam a mesma DLQ. A causa de cada falha deve ser investigada nos logs.
 
 ---
 
@@ -930,6 +963,8 @@ Alguns problemas só apareceram rodando o projeto de verdade contra Postgres e L
 - Outbox/Inbox transacionais, DLQ, retry com backoff.
 - Reprocessamento de referências fora de ordem, consistente entre caminho síncrono e assíncrono.
 - Observabilidade mínima (logs estruturados, métricas, liveness/readiness).
+- OPENING pela factory interna `WagerTransaction.opening()`; Inbox/Outbox com factories e transições de domínio.
+- Crash/reinício e SIGTERM reais; testes executados em infraestrutura exclusiva.
 
 **Não implementado, por decisão documentada:**
 
@@ -940,13 +975,14 @@ Alguns problemas só apareceram rodando o projeto de verdade contra Postgres e L
 - **Claims com lease na Outbox.** Hoje, `publishOutboxBatch()` mantém o lock de linha durante a chamada de rede ao SQS (curta, mas é I/O dentro de uma transação). Em volume muito maior, um esquema de lease/heartbeat evitaria segurar transações abertas durante I/O externo.
 - **Tracing distribuído (OpenTelemetry) e dashboard.** Hoje há métricas Prometheus e `correlationId` nos logs, mas não há um dashboard nem spans distribuídos entre API → worker → consumidor externo.
 - **Teste de carga com números reais.** Não há medição de throughput/p95/p99 neste repositório — não declaramos um RPS que não foi medido.
-- **Shutdown mais granular do worker.** O loop do worker termina o ciclo atual antes de checar `SIGTERM` de novo, o que evita cortar uma mensagem em processamento, mas não há teste automatizado simulando um `SIGTERM` real durante uma chamada de rede em andamento.
-- **`OPENING` passando pela factory de domínio.** Hoje, a transação `OPENING` é montada como um registro direto em `WalletService.create()`, sem passar por `WagerTransaction.create()` — um atalho de implementação para um caminho que é estritamente interno (não alcançável via API/fila), mas que foge, no sentido literal, da regra de modelagem da seção 6.0 do desafio (toda transação nasce pela factory).
+- **Shutdown sob falhas de rede prolongadas.** Há teste real de SIGTERM com mensagem em andamento, ACK e saída limpa, além de SIGKILL após commit. Interrupções em cada chamada de rede e um orçamento global de shutdown sob indisponibilidade prolongada ainda podem ampliar essa cobertura.
+- **Unificação das regras de referências.** O processamento inicial e o reprocessamento ainda repetem parte das validações de escopo/tipo/valor. Há testes de regressão para os dois caminhos; uma refatoração deve preservar essas evidências.
 
 ---
 
 ## Documentação complementar
 
+- **[docs/BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md)** — comandos seguros, matriz de requisitos, imagem Docker e limites das evidências.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — decisões técnicas, trade-offs e o registro detalhado do que foi validado, escrito pra quem avalia.
 - **[docs/STUDY_GUIDE.md](docs/STUDY_GUIDE.md)** — trilha de leitura sugerida (arquivo por arquivo, pergunta por pergunta) e glossário dos termos usados neste README.
 - **[GUIA_DE_APRESENTACAO.md](GUIA_DE_APRESENTACAO.md)** — roteiro para apresentar o projeto em 10-15 minutos, com as perguntas que um revisor sênior provavelmente vai fazer.

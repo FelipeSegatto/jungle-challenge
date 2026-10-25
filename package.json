@@ -7,7 +7,7 @@
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
     "typecheck": "bunx tsc --noEmit",
-    "test": "bun test test/money.test.ts test/wallet.test.ts test/hash.test.ts",
+    "test": "bun test test/money.test.ts test/wallet.test.ts test/hash.test.ts ./test/domain-transitions.test.ts ./test/test-safety.test.ts",
     "test:integration": "bun test test/integration.test.ts",
     "test:race": "bun scripts/race.ts",
     "test:3instances": "bun scripts/race-three.ts",
@@ -23,10 +23,13 @@
     "test:sigterm": "bun test test/worker-sigterm.test.ts",
     "test:consumer-retry": "bun test test/consumer-retry-dlq.test.ts",
     "test:consumer-dlq-persistent": "bun test test/consumer-dlq-persistent.test.ts",
-    "test:all": "bun run test && bun run test:integration && bun run test:messaging && bun run test:references && bun run test:parallel-wallets && bun run test:crash-recovery && bun run test:sigterm && bun run test:consumer-retry && bun run test:consumer-dlq-persistent && bun run test:race && bun run test:3instances",
+    "test:all": "bun scripts/test-isolated.ts",
     "demo:sqs": "bun scripts/demo-sqs.ts",
     "format": "bunx prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
-    "format:check": "bunx prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\""
+    "format:check": "bunx prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
+    "test:isolated": "bun scripts/test-isolated.ts",
+    "test:inbox-replay": "bun test ./test/inbox-replay.test.ts",
+    "test:atomicity": "bun test ./test/atomicity.test.ts"
   },
   "dependencies": {
     "@mikro-orm/core": "^7.0.0",
@@ -61,5 +64,8 @@
     ],
     "preferTs": true,
     "tsLoader": "oxc"
+  },
+  "overrides": {
+    "multer": "2.5.0"
   }
 }

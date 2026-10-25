@@ -1,13 +1,21 @@
 # Relatório de verificação da entrega
 
-**Verificações realizadas nesta montagem:**
+A verificação sintática inicial foi ampliada com execução real. Para reproduzir na raiz:
 
-- Arquivos TypeScript: parse do compilador TypeScript, sem erros sintáticos reportados.
-- `package.json` e `.prettierrc.json`: JSON válido.
-- `docker-compose.yml`: YAML válido com PostgreSQL, LocalStack, serviço de migrations, 3 APIs e 2 workers.
-- ZIP: integridade e nomes de arquivos conferidos após empacotamento.
-- Revisão do desenho contra o enunciado: transação financeira, locks por wallet, constraints do banco, Inbox/Outbox e workers presentes no código.
+```bash
+bun install --frozen-lockfile
+bun run format:check
+bun run typecheck
+bun run test:all
+```
 
-**Ainda não executado neste ambiente:** `bun install`, `bun run typecheck`, migrations no PostgreSQL, inicialização do NestJS, testes de unidade, testes de integração, testes de concorrência, recuperação em SQS/LocalStack e Docker Compose (Bun/Docker e acesso a registries não estão disponíveis nesta máquina de geração). Assim, não há como garantir aprovação ou ausência de bugs de runtime. **Antes de submeter, executar os comandos do README e corrigir eventuais falhas observadas.**
+## O que cada etapa verifica
 
-Uma vez instalado, execute `bun run format` e gere/commite o arquivo `bun.lock` produzido por `bun install` para travar as dependências. Não modifique o histórico das migrations já aplicadas em outro banco: use as migrations adicionais.
+- **Instalação congelada:** usa as versões e integridades do `bun.lock`, sem resolver dependências novas.
+- **Prettier:** padroniza espaços, quebras de linha, aspas e vírgulas. Não substitui compilação nem teste; a correção de estilo foi separada das mudanças funcionais e comparada por árvores sintáticas TypeScript.
+- **Typecheck:** valida os tipos no modo estrito configurado pelo projeto.
+- **Suíte completa:** executa domínio, HTTP, atomicidade, concorrência, inbox/outbox, reinício, SIGTERM e retry/DLQ com PostgreSQL e LocalStack reais em recursos exclusivos.
+
+O registro de resultados, os comandos por cenário e as limitações ficam em [docs/BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). O [checklist de entrega](CHECKLIST_DE_VALIDACAO.md) deve ser marcado somente após observar cada resultado.
+
+A formatação não corrige erros financeiros e não é uma falha de segurança. Sua reprovação indica diferença de estilo ou código ainda não padronizado. Após formatar, confirme tipos e testes para detectar qualquer regressão. Não edite migrations já aplicadas para corrigir dados ou constraints; adicione uma migration nova quando houver necessidade de evolução do schema.

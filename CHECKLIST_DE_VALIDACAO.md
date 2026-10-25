@@ -4,9 +4,11 @@
 
 ## Preparação
 
-- [ ] `bun --version` retorna 1.x
-- [ ] `bun install` executa sem erros
-- [ ] `bun run typecheck` aprova
+- [ ] `bun --version` retorna 1.4.4
+- [ ] `bun install --frozen-lockfile` executa sem erros
+- [ ] `bun run format:check` e `bun run typecheck` aprovam
+- [ ] `bun run test:all` prepara e remove infraestrutura exclusiva, com todas as suítes aprovadas
+- [ ] Guards rejeitam destinos HTTP remotos/ausentes, duplicação de origens e banco de desenvolvimento
 - [ ] `docker compose up -d --build` sobe serviços, migrations e três APIs
 - [ ] `GET /health/live`, `GET /health/ready` e `/health/metrics` funcionam
 - [ ] `bun run migration:pending` não lista migrations inesperadas
@@ -34,14 +36,15 @@
 
 - [ ] LocalStack possui entrada, DLQ e fila de eventos
 - [ ] Consumer chama mesmo WagerService do HTTP
-- [ ] Registro Inbox, saldo, ledger e Outbox compartilham commit
+- [ ] Registro Inbox, saldo, ledger e Outbox compartilham commit; `test:atomicity` força erro real na Outbox e verifica rollback integral e retry
 - [ ] Falha após commit antes de ACK gera redelivery sem segunda movimentação
 - [ ] Dois publishers publicam sem perder mensagens
 - [ ] Falha transitória de SQS mantém outbox pendente com backoff
 - [ ] Mensagens inválidas vão para DLQ; transient retries respeitam redrive
 - [ ] REFUND fora de ordem é retomada quando BET aparece
 - [ ] Referência ausente expira com REFERENCE_NOT_FOUND
-- [ ] SIGTERM aguarda operação em curso ou broker recupera após visibility timeout
+- [ ] SIGTERM termina a mensagem em curso, confirma ACK e encerra limpo dentro do prazo
+- [ ] Reinício real da API preserva replay; envelopes pendentes são recebidos na fila de saída
 
 ## Entrega
 

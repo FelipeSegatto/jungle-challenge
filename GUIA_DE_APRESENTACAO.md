@@ -28,7 +28,7 @@ FIFO com `MessageGroupId=walletId` otimiza a ordenação e reduz a chance de dua
 Idempotência exige devolver o resultado **original**, não uma fotografia do presente. Entre a primeira chamada e um replay, outras operações podem ter mudado o saldo da wallet; se o replay consultasse o saldo atual, duas chamadas com a mesma key e o mesmo payload poderiam devolver respostas diferentes, o que quebra a própria definição de idempotência.
 
 **4. O que acontece se o worker morrer entre o commit e o ACK da mensagem SQS?**
-O SQS reentrega depois do `VisibilityTimeout` expirar. A Inbox (dedup por `consumerName`+`messageId`) e a `idempotencyKey` reconhecem que aquela operação já foi aplicada, e o consumer só confirma (ACK) sem gerar um novo efeito financeiro. Testado em `test/messaging.test.ts`.
+O SQS reentrega depois do `VisibilityTimeout` expirar. A Inbox (dedup por `consumerName`+`messageId`) e a `idempotencyKey` reconhecem que aquela operação já foi aplicada, e o consumer só confirma (ACK) sem gerar um novo efeito financeiro. Testado com processo real em `test/worker-crash-recovery.test.ts`; há também cobertura de inbox/outbox em `test/messaging.test.ts`.
 
 **5. O que acontece se o publisher da Outbox morrer depois de mandar a mensagem pro SQS mas antes de marcar `published_at`?**
 A mensagem pode ser reenviada por outro ciclo do worker, porque a linha ainda aparece como pendente. Isso é aceito de propósito: o evento tem um `eventId` estável, e o consumidor externo precisa deduplicar por ele. O sistema garante at-least-once na entrega do evento, não exactly-once — e é explícito sobre essa diferença.
@@ -61,4 +61,22 @@ Auditabilidade. O saldo é um número que já esqueceu como chegou lá; o ledger
 Não. O que existe é retry limitado (3 tentativas) para os códigos de deadlock (`40P01`) e falha de serialização (`40001`) do Postgres, e uma ordem consistente de aquisição de lock (sempre a wallet primeiro). Isso reduz a probabilidade, não elimina a possibilidade teórica — não haveria como afirmar isso sem uma prova formal, que este projeto não tem.
 
 **15. O que você melhoraria com mais tempo?**
-Teste de carga real com números medidos (hoje não existe nenhum), claims com lease na Outbox para não segurar transação durante a chamada de rede ao SQS, tracing distribuído, e mover a transação `OPENING` para passar pela mesma factory de domínio que as demais operações usam, em vez do atalho atual.
+Teste de carga real com números medidos (hoje não existe nenhum), claims com lease na Outbox para não segurar transação durante a chamada de rede ao SQS, tracing distribuído, e unificar as regras de referência repetidas entre processamento inicial e retry. OPENING já usa sua factory interna.
+
+
+## Roteiro pelo terminal, com infraestrutura exclusiva
+
+Na raiz, execute `bun run test:all` para a validação completa ou selecione os blocos abaixo. O runner cria suas próprias APIs, PostgreSQL e LocalStack; a aplicação da demonstração pode continuar rodando.
+
+| Comando | Resultado que deve ser mostrado | Requisito explicado |
+|---|---|---|
+| `bun run test` | Domínio e guards sem falhas | Precisão, invariantes, estados e proteção dos testes |
+| `bun run test:isolated test:integration test:atomicity` | Operações válidas e inválidas; falha da Outbox reverte tudo, seguida de retry único | Correção financeira e atomicidade |
+| `bun run test:isolated test:race test:3instances` | PASS, saldo 19, dois débitos e reconciliação consistente | 80+80 sobre 100 e 50 reenvios, inclusive em três processos |
+| `bun run test:isolated test:parallel-wallets test:inbox-replay` | Wallets independentes e uma inbox por mensagem, sem novo débito no replay | Concorrência e deduplicação persistente |
+| `bun run test:isolated test:crash-recovery test:sigterm` | Reentrega número 2, replay após reinício, eventos na fila e shutdown limpo | Recuperação e encerramento |
+| `bun run test:isolated test:consumer-retry test:consumer-dlq-persistent` | Retry observado; mensagem inválida na DLQ; cinco tentativas antes do redrive persistente | Tratamento de falhas e DLQ |
+
+Na atomicidade, explique: “O banco recusa a gravação do evento de saída. Mesmo que o código já tenha preparado o débito, a transação inteira é revertida. Depois de retirar a falha, repetir a mesma chave aplica o débito só uma vez.”
+
+Na corrida, explique: “100 menos uma BET de 80 deixa 20. A segunda BET de 80 é rejeitada. Depois, cinquenta envios da aposta de 1 geram um único débito: saldo final 19 e dois débitos no ledger.”

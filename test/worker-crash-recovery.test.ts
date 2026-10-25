@@ -1,187 +1,197 @@
-/**
- * Integração real com processos de verdade. Requer PostgreSQL, LocalStack e `bun` no PATH (os
- * testes spawnam `bun src/worker-main.ts` como processo filho de verdade — nunca chamam
- * `consumeOnce`/`WagerService.process` diretamente para simular o worker).
- *
- * Cobre os itens B e C do pedido de cobertura: morte real do worker após commit e antes do ACK
- * (B), e recuperação após reinício com outbox pendente e idempotência sobrevivendo (C). O item D
- * (SIGTERM) está em `worker-sigterm.test.ts`, em arquivo/processo `bun test` separado — rodando
- * logo depois de B/C no mesmo processo ele ficava instável esperando uma entrega de mensagem SQS
- * que não chegava a tempo; isolado, passa de forma limpa e repetida.
- */
+import './harness/environment';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MikroORM } from '@mikro-orm/postgresql';
-import { PurgeQueueCommand, ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import { DeleteMessageCommand, ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import config from '../mikro-orm.config';
-import { ensureQueues, sqsClient, submitMessage, type QueueUrls } from '../src/infrastructure/sqs/queues';
+import {
+  ensureQueues,
+  sqsClient,
+  submitMessage,
+  type QueueUrls,
+} from '../src/infrastructure/sqs/queues';
 import { WalletService } from '../src/application/services';
 import { LedgerRow, InboxRow, OutboxRow } from '../src/infrastructure/entities/rows';
 import { assertBalanceMatchesLedger } from './harness/reconcile';
-import { createSentinelDir, removeSentinelDir, spawnWorker, waitForSentinel, pollUntil, killAndWait } from './harness/workerProcess';
-
-let orm: MikroORM;
-let client: SQSClient;
-let urls: QueueUrls;
-const host = process.env.BASE_URL ?? 'http://localhost:3000';
-
-/**
- * Fila exclusiva de testes (LocalStack local, nunca compartilhada) — purgar aqui só remove lixo
- * órfão de execuções anteriores deste mesmo arquivo de teste, nunca uma fila de produção.
- */
-async function purgeInputQueue(): Promise<void> {
-  await client.send(new PurgeQueueCommand({ QueueUrl: urls.input })).catch(() => {});
-  await new Promise((resolve) => setTimeout(resolve, 500));
-}
-
+import {
+  createSentinelDir,
+  spawnWorker,
+  waitForSentinel,
+  pollUntil,
+  killAndWait,
+  waitForWorkerEvent,
+  spawnApi,
+} from './harness/workerProcess';
+let orm: MikroORM, client: SQSClient, urls: QueueUrls;
 beforeAll(async () => {
   orm = await MikroORM.init(config);
   client = sqsClient();
   urls = await ensureQueues(client);
-  await purgeInputQueue();
 });
 afterAll(async () => {
   client?.destroy();
   if (orm) await orm.close(true);
 });
-
 const uuid = () => crypto.randomUUID();
-
-function wagerEvent(params: { messageId: string; playerId: string; walletId: string; amount: string; externalTransactionId?: string }) {
-  const externalTransactionId = params.externalTransactionId ?? `bet-${uuid()}`;
-  const data = {
-    providerId: 'crash-test', externalTransactionId, idempotencyKey: `crash-test:${externalTransactionId}`,
-    playerId: params.playerId, walletId: params.walletId, roundId: 'r-1', gameId: 'g-1',
-    kind: 'BET' as const, money: { amount: params.amount, currency: 'BRL' },
+function wagerEvent(playerId: string, walletId: string, amount: string) {
+  const externalTransactionId = `bet-${uuid()}`;
+  return {
+    messageId: uuid(),
+    type: 'WagerTransactionRequested' as const,
+    occurredAt: new Date().toISOString(),
+    data: {
+      providerId: 'crash-test',
+      externalTransactionId,
+      idempotencyKey: `crash-test:${externalTransactionId}`,
+      playerId,
+      walletId,
+      roundId: 'r-1',
+      gameId: 'g-1',
+      kind: 'BET' as const,
+      money: { amount, currency: 'BRL' },
+    },
   };
-  return { messageId: params.messageId, type: 'WagerTransactionRequested' as const, occurredAt: new Date().toISOString(), data };
 }
-
-/** Confirma, direto na fila real, se uma mensagem com este messageId ainda está presente/visível. */
-async function messageStillInQueue(targetMessageId: string): Promise<boolean> {
-  const received = await client.send(new ReceiveMessageCommand({ QueueUrl: urls.input, MaxNumberOfMessages: 10, WaitTimeSeconds: 1 }));
-  return (received.Messages ?? []).some((m) => m.Body && JSON.parse(m.Body).messageId === targetMessageId);
-}
-
-describe('B — worker morto após commit, antes do ACK (processo real)', () => {
-  test('commit sobrevive ao kill -9; reentrega real reprocessa de forma idempotente, sem duplicar o débito', async () => {
+describe('real process recovery', () => {
+  test('SIGKILL after commit, actual redelivery and confirmed DeleteMessage', async () => {
     const playerId = uuid();
-    const wallet = await new WalletService(orm.em.fork()).create(playerId, { amount: '100.00', currency: 'BRL' });
-    const messageId = uuid();
-    const event = wagerEvent({ messageId, playerId, walletId: wallet.id, amount: '30.00' });
-
-    const sentinelDir1 = await createSentinelDir();
-    const worker1 = spawnWorker({
+    const wallet = await new WalletService(orm.em.fork()).create(playerId, {
+      amount: '100.00',
+      currency: 'BRL',
+    });
+    const event = wagerEvent(playerId, wallet.id, '30.00');
+    const dir = await createSentinelDir();
+    const first = spawnWorker({
       env: {
-        TEST_SYNC_SENTINEL_DIR: sentinelDir1, WORKER_POLL_SECONDS: '1', WORKER_VISIBILITY_TIMEOUT_SECONDS: '3',
-        // Filtra pelo messageId desta execução — a fila real pode ter mensagens órfãs de execuções
-        // anteriores, e sem esse filtro o worker processando QUALQUER mensagem já dispararia o sentinela.
-        TEST_SYNC_MESSAGE_ID: messageId,
-        // Pausa curta DEPOIS do commit real — dá ao teste uma janela confiável para matar o
-        // processo exatamente ali, em vez de torcer para vencer uma corrida de poucos milissegundos
-        // contra o próprio DeleteMessageCommand que viria em seguida.
+        TEST_SYNC_SENTINEL_DIR: dir,
+        TEST_SYNC_MESSAGE_ID: event.messageId,
         TEST_SYNC_PAUSE_AT: 'after-commit-before-ack',
+        WORKER_POLL_SECONDS: '1',
+        WORKER_VISIBILITY_TIMEOUT_SECONDS: '3',
       },
     });
     try {
       await submitMessage(client, urls.input, event);
-      // Ponto de sincronização real: o worker só escreve este sentinela DEPOIS que WagerService.process()
-      // retornou — ou seja, depois que a transação SQL (saldo + ledger + inbox) já comitou.
-      await waitForSentinel(sentinelDir1, 'after-commit-before-ack', 30000);
-      await killAndWait(worker1, 'SIGKILL');
+      await waitForSentinel(dir, 'after-commit-before-ack', 30000);
     } finally {
-      await removeSentinelDir(sentinelDir1);
+      await killAndWait(first);
     }
-
-    // Commit real confirmado mesmo sem ACK: saldo debitado, 1 lançamento, inbox marcada processada.
     await assertBalanceMatchesLedger(orm.em, wallet.id, '70.00');
-    const inboxRow = await orm.em.fork().findOneOrFail(InboxRow, { consumerName: 'wager-sqs-v1', messageId });
-    expect(inboxRow.processedAt).not.toBeNull();
-    const debits = await orm.em.fork().find(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' });
-    expect(debits).toHaveLength(1);
-
-    // Nota: não checamos "a mensagem ainda está na fila" aqui — logo após o kill ela está apenas
-    // invisível (dentro do próprio VisibilityTimeout da recepção original), o que pareceria igual a
-    // "foi confirmada" nesse instante exato. A prova real de que NUNCA foi confirmada vem a seguir:
-    // um worker novo consegue recebê-la e reprocessá-la depois que a visibilidade expira.
-
-    // Reinicia um worker LIMPO (processo novo) e espera a reentrega real do SQS ser reprocessada.
-    const sentinelDir2 = await createSentinelDir();
-    const worker2 = spawnWorker({
-      env: { TEST_SYNC_SENTINEL_DIR: sentinelDir2, WORKER_POLL_SECONDS: '1', TEST_SYNC_MESSAGE_ID: messageId },
+    expect(
+      (await orm.em.fork().findOneOrFail(InboxRow, { messageId: event.messageId })).processedAt,
+    ).not.toBeNull();
+    const dir2 = await createSentinelDir();
+    const second = spawnWorker({
+      env: {
+        TEST_SYNC_SENTINEL_DIR: dir2,
+        TEST_SYNC_MESSAGE_ID: event.messageId,
+        WORKER_POLL_SECONDS: '1',
+      },
     });
     try {
-      await waitForSentinel(sentinelDir2, 'after-commit-before-ack', 30000);
-      const ackedNow = await pollUntil(async () => !(await messageStillInQueue(messageId)), 20000, 300);
-      expect(ackedNow).toBe(true);
+      const receiveFile = await waitForSentinel(dir2, 'receive-2', 30000);
+      expect((await Bun.file(`${dir2}/${receiveFile}`).json()).count).toBe(2);
+      const ack = await waitForWorkerEvent(second, 'sqs_processed', event.messageId);
+      expect(ack.status).toBe('PROCESSED');
+      expect(ack.messageId).toBe(event.messageId);
     } finally {
-      await killAndWait(worker2, 'SIGTERM');
-      await removeSentinelDir(sentinelDir2);
+      await killAndWait(second, 'SIGTERM');
     }
-
-    // Efeito financeiro único mesmo após a reentrega+reprocessamento real: nenhum segundo débito.
     await assertBalanceMatchesLedger(orm.em, wallet.id, '70.00');
-    const finalDebits = await orm.em.fork().find(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' });
-    expect(finalDebits).toHaveLength(1);
+    expect(await orm.em.fork().count(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' })).toBe(
+      1,
+    );
+    expect(await orm.em.fork().count(InboxRow, { messageId: event.messageId })).toBe(1);
+  }, 90000);
 
-    const recon = await fetch(`${host}/wallets/${wallet.id}/reconciliation`, { method: 'POST' }).then((r) => r.json());
-    expect(recon.consistent).toBe(true);
-    expect(recon.storedBalance.amount).toBe('70.00');
-  }, 120000);
-});
-
-describe('C — recuperação após reinício (outbox pendente + idempotência sobrevive)', () => {
-  test('outbox pendente antes do reinício é publicada depois; replay de uma operação anterior ainda é idempotente', async () => {
+  test('API actually restarts, replay survives, and pending outbox envelopes reach SQS', async () => {
     const playerId = uuid();
-    const wallet = await new WalletService(orm.em.fork()).create(playerId, { amount: '50.00', currency: 'BRL' });
-    const messageId = uuid();
-    const event = wagerEvent({ messageId, playerId, walletId: wallet.id, amount: '15.00' });
-    // `data.idempotencyKey` existe só para o envelope SQS — o endpoint HTTP usa o header, e rejeita
-    // (ValidationPipe forbidNonWhitelisted) qualquer campo extra no corpo que o DTO não declare.
-    const { idempotencyKey: _unused, ...httpBody } = event.data;
-
-    // Publica via HTTP (processo da API, já rodando) para gerar outbox pendente real sem nenhum worker no ar ainda.
-    const httpResponse = await fetch(`${host}/wagering/transactions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': event.data.idempotencyKey },
-      body: JSON.stringify(httpBody),
-    }).then((r) => r.json());
-    expect(httpResponse.status).toBe('PROCESSED');
-
-    const pendingBefore = await orm.em.fork().count(OutboxRow, { aggregateId: wallet.id, publishedAt: null });
-    expect(pendingBefore).toBeGreaterThanOrEqual(1);
-
-    // "Reinício do serviço": sobe um worker real do zero — ele não tinha nenhum estado em memória sobre esta wallet.
-    const sentinelDir = await createSentinelDir();
-    const worker = spawnWorker({ env: { TEST_SYNC_SENTINEL_DIR: sentinelDir, WORKER_POLL_SECONDS: '1' } });
-    try {
-      const published = await pollUntil(async () => {
-        const pending = await orm.em.fork().count(OutboxRow, { aggregateId: wallet.id, publishedAt: null });
-        return pending === 0;
-      }, 30000, 300);
-      expect(published).toBe(true);
-
-      // Reenvia a MESMA operação (mesma Idempotency-Key) depois que o worker já reiniciou — precisa
-      // continuar sendo replay, não um novo efeito, provando que a idempotência é do Postgres, não de memória de processo.
-      const replay = await fetch(`${host}/wagering/transactions`, {
+    const wallet = await new WalletService(orm.em.fork()).create(playerId, {
+      amount: '50.00',
+      currency: 'BRL',
+    });
+    const event = wagerEvent(playerId, wallet.id, '15.00');
+    const { idempotencyKey, ...body } = event.data;
+    const submit = async (base: string) => {
+      const response = await fetch(`${base}/wagering/transactions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': event.data.idempotencyKey },
-        body: JSON.stringify(httpBody),
-      }).then((r) => r.json());
+        headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<{
+        transactionId: string;
+        idempotentReplay: boolean;
+        balance: { amount: string };
+      }>;
+    };
+    const firstApi = await spawnApi();
+    let original: Awaited<ReturnType<typeof submit>>;
+    try {
+      original = await submit(firstApi.base);
+    } finally {
+      await killAndWait(firstApi.process);
+    }
+    const pending = await orm.em
+      .fork()
+      .find(OutboxRow, { aggregateId: wallet.id, publishedAt: null });
+    expect(pending.length).toBeGreaterThanOrEqual(2);
+    const secondApi = await spawnApi();
+    try {
+      expect(secondApi.process.pid).not.toBe(firstApi.process.pid);
+      const replay = await submit(secondApi.base);
       expect(replay.idempotentReplay).toBe(true);
-      expect(replay.transactionId).toBe(httpResponse.transactionId);
+      expect(replay.transactionId).toBe(original!.transactionId);
+      expect(replay.balance).toEqual(original!.balance);
+    } finally {
+      await killAndWait(secondApi.process, 'SIGTERM');
+    }
+    const worker = spawnWorker({ env: { WORKER_POLL_SECONDS: '1' } });
+    try {
+      const receivedIds = new Set<string>();
+      const delivered = await pollUntil(async () => {
+        const received = await client.send(
+          new ReceiveMessageCommand({
+            QueueUrl: urls.events,
+            MaxNumberOfMessages: 10,
+            WaitTimeSeconds: 1,
+            VisibilityTimeout: 1,
+          }),
+        );
+        for (const message of received.Messages ?? []) {
+          if (!message.Body) continue;
+          const envelope = JSON.parse(message.Body);
+          const expected = pending.find((row) => row.id === envelope.eventId);
+          if (expected) {
+            expect(envelope).toEqual(expected.payload);
+            receivedIds.add(envelope.eventId);
+          }
+          if (message.ReceiptHandle)
+            await client.send(
+              new DeleteMessageCommand({
+                QueueUrl: urls.events,
+                ReceiptHandle: message.ReceiptHandle,
+              }),
+            );
+        }
+        return pending.every((row) => receivedIds.has(row.id));
+      }, 30000);
+      expect(delivered).toBe(true);
+      expect(
+        await pollUntil(
+          async () =>
+            (await orm.em
+              .fork()
+              .count(OutboxRow, { aggregateId: wallet.id, publishedAt: null })) === 0,
+          10000,
+        ),
+      ).toBe(true);
     } finally {
       await killAndWait(worker, 'SIGTERM');
-      await removeSentinelDir(sentinelDir);
     }
-
-    // Consistência final: saldo == ledger reconstruído, e nenhum segundo débito do replay pós-reinício.
     await assertBalanceMatchesLedger(orm.em, wallet.id, '35.00');
-    const debits = await orm.em.fork().find(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' });
-    expect(debits).toHaveLength(1);
-    const inboxRows = await orm.em.fork().find(InboxRow, { messageId });
-    // Esta operação específica entrou via HTTP, não via SQS — não deve ter criado uma linha de inbox
-    // para este messageId (inbox é só para o caminho de mensageria); confirmamos que não há 2 linhas por engano.
-    expect(inboxRows.length).toBeLessThanOrEqual(1);
-  }, 120000);
+    expect(await orm.em.fork().count(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' })).toBe(
+      1,
+    );
+    expect(await orm.em.fork().count(InboxRow, { messageId: event.messageId })).toBe(0);
+  }, 90000);
 });
-

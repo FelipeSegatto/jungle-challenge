@@ -10,24 +10,42 @@ import { canonicalJson, payloadHash } from '../src/domain/hash';
  */
 describe('payloadHash — base da detecção de payload divergente na mesma Idempotency-Key', () => {
   const base = {
-    providerId: 'provider-a', externalTransactionId: 'tx-1', walletId: 'wallet-1',
-    playerId: 'player-1', roundId: 'round-1', gameId: 'game-1', kind: 'BET',
-    money: { amount: '10.00', currency: 'BRL' }, referenceExternalTransactionId: null,
+    providerId: 'provider-a',
+    externalTransactionId: 'tx-1',
+    walletId: 'wallet-1',
+    playerId: 'player-1',
+    roundId: 'round-1',
+    gameId: 'game-1',
+    kind: 'BET',
+    money: { amount: '10.00', currency: 'BRL' },
+    referenceExternalTransactionId: null,
   };
 
   test('mesmo payload, só com a ordem das chaves diferente, produz o mesmo hash -> replay seguro', () => {
-    const reordered = { kind: base.kind, money: base.money, gameId: base.gameId, roundId: base.roundId,
-      playerId: base.playerId, walletId: base.walletId, externalTransactionId: base.externalTransactionId,
-      providerId: base.providerId, referenceExternalTransactionId: base.referenceExternalTransactionId };
+    const reordered = {
+      kind: base.kind,
+      money: base.money,
+      gameId: base.gameId,
+      roundId: base.roundId,
+      playerId: base.playerId,
+      walletId: base.walletId,
+      externalTransactionId: base.externalTransactionId,
+      providerId: base.providerId,
+      referenceExternalTransactionId: base.referenceExternalTransactionId,
+    };
     expect(payloadHash(base)).toBe(payloadHash(reordered));
   });
 
   test('amount diferente produz hash diferente', () => {
-    expect(payloadHash(base)).not.toBe(payloadHash({ ...base, money: { amount: '10.01', currency: 'BRL' } }));
+    expect(payloadHash(base)).not.toBe(
+      payloadHash({ ...base, money: { amount: '10.01', currency: 'BRL' } }),
+    );
   });
 
   test('currency diferente produz hash diferente', () => {
-    expect(payloadHash(base)).not.toBe(payloadHash({ ...base, money: { amount: '10.00', currency: 'USD' } }));
+    expect(payloadHash(base)).not.toBe(
+      payloadHash({ ...base, money: { amount: '10.00', currency: 'USD' } }),
+    );
   });
 
   test('playerId diferente produz hash diferente', () => {
@@ -43,7 +61,9 @@ describe('payloadHash — base da detecção de payload divergente na mesma Idem
   });
 
   test('referenceExternalTransactionId diferente (ex.: null vs. preenchido) produz hash diferente', () => {
-    expect(payloadHash(base)).not.toBe(payloadHash({ ...base, referenceExternalTransactionId: 'ref-1' }));
+    expect(payloadHash(base)).not.toBe(
+      payloadHash({ ...base, referenceExternalTransactionId: 'ref-1' }),
+    );
   });
 
   test('canonicalJson ordena chaves de objetos aninhados independentemente da ordem de inserção', () => {

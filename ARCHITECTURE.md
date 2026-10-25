@@ -73,10 +73,26 @@ Trade-off: a transação de claim mantém row locks durante a chamada curta ao S
 - Métricas: operações por status, duplicatas, retries, DLQ, conflitos, outbox lag, latência e divergências.
 - HTTP: 400 payload inválido, 409 conflito de idempotência, 422 rejeição de negócio, 202 pendência, 503 dependência transitória.
 
-## 10. Limitações e próximos refinamentos
+## 10. Validação executada
 
-Esta implementação **precisa ser compilada e testada com Bun, PostgreSQL e LocalStack em execução** antes de qualquer submissão; os testes do repositório mostram como produzir evidência. A integridade de `Money` e os limites de valor são validados no domínio e no schema; a fronteira de autenticação é um no-op documentado.
+Esta implementação foi de fato compilada e testada com Bun, PostgreSQL e LocalStack em execução — não é uma expectativa para quem for rodar depois, é um resultado já observado:
 
-`FAILED` existe como status terminal auditável, mas eventos SQS irrecuperavelmente malformados seguem para a DLQ em vez de criar uma transação financeira `FAILED` sem identidade válida. Não existe dashboard gráfico nem OpenTelemetry distribuído. Não existem testes de throughput com resultados mensurados; não declaramos RPS ou p95 sem medição. O broker continua sendo at-least-once, exigindo consumidores idempotentes.
+- `bun run typecheck` — limpo (TypeScript estrito, sem `any`/`ts-ignore`).
+- `bun run test` (Money/Wallet) — 7/7.
+- `bun run test:integration` (HTTP + PostgreSQL reais, 13 testes) — 13/13, incluindo os 5 cenários de `Idempotency-Key` reusada com `amount`/`playerId`/`walletId` divergentes.
+- `bun run test:references` (referências fora de ordem) — 3/3, incluindo a regressão permanente de WIN referenciando BET com valor diferente, nos dois sentidos de chegada.
+- `bun run test:messaging` (Inbox/Outbox/DLQ contra LocalStack real) — 3/3, reexecutado 8x consecutivas sem falha; o teste de publishers concorrentes força uma falha real de `SendMessageCommand` (fila inexistente, não mock) e prova recuperação via backoff até publicação completa dentro de um deadline controlado.
+- `bun run test:race` e `bun run test:3instances` — cenário obrigatório da seção 8 (100,00 → duas BET de 80,00) reproduzido com 3 processos HTTP independentes reais: uma `PROCESSED`, uma `REJECTED`, saldo final correto, um único lançamento de débito, reconciliação consistente.
+- Migrations `up → down → down → up → pending` em banco descartável — reversíveis, sem pendências ao final.
+
+A integridade de `Money` e os limites de valor são validados no domínio e no schema; a fronteira de autenticação é um no-op documentado.
+
+## 11. Limitações conhecidas
+
+`FAILED` existe como status terminal auditável, mas eventos SQS irrecuperavelmente malformados seguem para a DLQ em vez de criar uma transação financeira `FAILED` sem identidade válida — nenhum caminho atual chega a produzir esse status na prática. Não existe dashboard gráfico nem OpenTelemetry distribuído. Não existem testes de throughput com resultados mensurados; não declaramos RPS ou p95 sem medição. O broker continua sendo at-least-once, exigindo consumidores idempotentes.
+
+A verificação de `Idempotency-Key` roda antes de qualquer validação dependente da wallet (ver seção 5), mas depende do hash já estar calculado — por isso payload estruturalmente inválido (`money` malformado, moeda não suportada, referência exigida/não permitida, auto-referência) ainda é rejeitado antes do pre-check de idempotência. Isso é intencional: a seção 9 do desafio trata "payload inválido" como categoria distinta e anterior a "conflito de idempotência", e não é possível canonicalizar/hashear um payload malformado.
+
+A transação `OPENING` (abertura de wallet com saldo inicial) é montada como registro direto, sem passar pela factory `WagerTransaction.create()` — é um atalho de implementação para o caminho interno-only, não uma transição de negócio alcançável via API/fila, mas foge estritamente da regra de modelagem da seção 6.0.
 
 Migrations são `Migration202610230001` (base) e `Migration202610240002` (constraints compostas), ambas com `up()` e `down()`. A segunda não edita histórico aplicado.

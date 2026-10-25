@@ -22,7 +22,7 @@ Se você quer entender o sistema caminhando pelo código com exemplos e diagrama
 
 **Contexto.** O desafio exige que o consumidor SQS "reutilize o mesmo use case da entrada HTTP" (seção 10). Isso não é só uma preferência de estilo — é uma garantia de correção: se a regra "`BET` debita, valida saldo, grava ledger" existisse em dois lugares (um para HTTP, outro para SQS), bastaria uma das duas cópias ficar desatualizada para o sistema aceitar, por exemplo, uma aposta sem saldo suficiente vinda só por um dos dois canais.
 
-**Alternativas consideradas.**
+**Possíveis alternativas.**
 - *Duplicar a lógica em cada adaptador* (um `WalletController` com a regra embutida, um `SqsHandler` com a regra reimplementada) — descartado de imediato: é exatamente o cenário de inconsistência acima.
 - *Um "serviço de domínio" chamado por ambos, mas com a transação aberta em cada adaptador* — mais próximo do que foi feito, mas deixaria cada adaptador responsável por acertar a ordem de lock/commit, duplicando a parte mais sensível do desenho.
 - *Um único caso de uso que já abre e fecha sua própria transação, recebendo um DTO e um contexto opcional de origem* — adotado.
@@ -39,7 +39,7 @@ As camadas inferiores (`src/domain/*.ts`) não importam nada de `@nestjs/*` nem 
 
 **Contexto.** O desafio é explícito: autenticação não entra na nota (seção 14), e implementar ou não é uma escolha do candidato, desde que documentada. Os endpoints de `/health/*` ficam abertos por definição; mensagens da fila são "canal interno confiável", mas a identidade do provedor dentro da mensagem continua sujeita a validação de domínio (isso já está coberto: `providerId` é usado nas checagens de escopo de referência, independente de autenticação).
 
-**Alternativas consideradas.**
+**Possíveis alternativas.**
 - *Implementar autenticação própria* (tabela de usuários, hash de senha) — explicitamente proibido pelo próprio enunciado ("nada de tabela própria de usuários com hash de senha").
 - *Integrar um Identity Provider real (Keycloak/Zitadel via OIDC)* — seria o caminho certo para produção, mas consome tempo que o enunciado pede para não ser gasto aqui, já que não pontua.
 - *Omitir, com um ponto de extensão explícito e documentado* — adotado.
@@ -56,7 +56,7 @@ As camadas inferiores (`src/domain/*.ts`) não importam nada de `@nestjs/*` nem 
 
 **Contexto.** O desafio proíbe `number`/`float`/`double` para dinheiro, sob pena de falha eliminatória, e pede que a escolha de mapeamento seja justificada aqui.
 
-**Alternativas consideradas.**
+**Possíveis alternativas.**
 - *Inteiro em centavos* (`amount_cents: bigint`) — evita o problema de ponto flutuante, mas exige multiplicar/dividir por 100 em toda borda do sistema (serialização, logs, resposta HTTP), e isso é exatamente o tipo de lugar onde um fator de conversão errado passa despercebido.
 - *`number`/`float` do JavaScript* — descartado, é a falha eliminatória que o enunciado cita.
 - *Tipo decimal dedicado (`Decimal` via `decimal.js`), serializado como string decimal de escala fixa* — adotado.
@@ -77,7 +77,7 @@ A conversão entre `Money` (domínio) e a string de banco acontece só em `servi
 
 **Contexto.** O desafio permite MikroORM (preferencial) ou TypeORM, e pede que a estratégia transacional seja justificada.
 
-**Alternativas consideradas.**
+**Possíveis alternativas.**
 - *TypeORM* — aceito pelo enunciado, mas com Unit of Work e Identity Map menos explícitos; `LockMode` como conceito de primeira classe é mais direto no MikroORM.
 - *Prisma ou outro ORM* — fora do escopo permitido pelo enunciado.
 - *MikroORM 7, com `EntityManager.transactional()` e `LockMode` explícito* — adotado.
@@ -96,7 +96,7 @@ Essa distinção entre `flush()` e commit importa porque algumas inserções dep
 
 **Contexto.** O desafio define a unidade de concorrência como a `walletId` e exige correção sob: duas apostas disputando o mesmo saldo, múltiplos workers na mesma wallet, wallets diferentes em paralelo, e três ou mais instâncias simultâneas — com um cenário obrigatório específico (wallet de R$ 100, duas `BET`s de R$ 80 concorrentes: uma `PROCESSED`, uma `REJECTED`, saldo final R$ 20, um único lançamento de débito, nenhum retry duplicando o débito).
 
-**Alternativas consideradas.**
+**Possíveis alternativas.**
 
 | Estratégia | Por que foi ou não escolhida |
 |---|---|
@@ -124,7 +124,7 @@ A unidade do lock é a **linha da wallet**, não uma tabela inteira nem um recur
 
 **Contexto.** O desafio exige idempotência persistente (não cache em memória), com o `Idempotency-Key` como fonte da verdade, e exige que a API distinga claramente conflito de idempotência de outras rejeições.
 
-**Alternativas consideradas para a verificação de duplicidade.**
+**Possíveis alternativas para a verificação de duplicidade.**
 - *Cache em memória (`Map<string, Response>`)* — proibido explicitamente (seção 5) e inútil com múltiplas instâncias: cada processo teria seu próprio cache, sem visibilidade do que outra instância já processou.
 - *Verificar só `(providerId, externalTransactionId)`, sem key dedicada* — o enunciado pede explicitamente um header `Idempotency-Key` separado, exatamente para permitir reenvio controlado por quem está integrando, independente de como o payload de negócio está estruturado.
 - *`UNIQUE(idempotency_key)` na tabela de transações, com hash do payload de negócio para distinguir replay de conflito* — adotado.

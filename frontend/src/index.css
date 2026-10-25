@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark mode é o único modo deste console (ver ARCHITECTURE deste frontend) — fundo fixo aqui
+   evita flash branco antes do React montar, sem precisar da estratégia dark: do Tailwind. */
+@layer base {
+  html,
+  body {
+    background-color: theme('colors.slate.950');
+    color-scheme: dark;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

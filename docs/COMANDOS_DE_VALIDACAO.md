@@ -1,17 +1,16 @@
 # Comandos para validar cada requisito do desafio
 
-Guia prático: cada linha do `challenge.md` que pede uma garantia específica, ligada ao comando real
-que a exercita. Todos os comandos abaixo rodam na raiz do projeto (não em `frontend/`).
+Guia prático: requisitos do enunciado ligados às suítes que os exercitam. Todos os comandos abaixo rodam na raiz do projeto (não em `frontend/`).
 
 ## 0. Preparação única
 
 ```bash
-bun install --frozen-lockfile
-cp .env.example .env            # se ainda não existir
-docker compose up -d --build    # sobe postgres, localstack, migrate, api1/2/3, worker1/2
+docker compose up -d --build --wait
+# sobe postgres, localstack, migrate, api1/2/3, worker1/2 e frontend
 ```
 
 Confirma que subiu certo:
+
 ```bash
 curl http://localhost:3001/health/live
 curl http://localhost:3001/health/ready
@@ -20,7 +19,7 @@ curl http://localhost:3001/health/ready
 ## 1. Suíte completa, isolada, em Linux real (recomendado — é o que o avaliador provavelmente vai rodar)
 
 ```bash
-bun run test:all
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
 ```
 
 Builda uma imagem Linux própria e roda, em containers descartáveis (Postgres + LocalStack exclusivos,
@@ -28,34 +27,46 @@ sem tocar no `docker compose up` da seção 0): `format:check`, `typecheck`, as 
 13 suítes abaixo, em sequência. Isso cobre sozinho praticamente toda a seção 13 do desafio.
 
 Para rodar só uma parte (mesma infraestrutura isolada):
+
 ```bash
-TEST_SUITES=test:crash-recovery,test:sigterm bun run test:all
+TEST_SUITES=test:crash-recovery,test:sigterm docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
 ```
 
-## 2. Comando por requisito (se quiser rodar peça por peça, sem Docker)
+O sucesso é indicado por `PASS: isolated checks completed` e saída `0` do serviço `tests`.
+Para PowerShell, defina `$env:TEST_SUITES = 'test:crash-recovery,test:sigterm'` antes do comando
+Docker e remova com `Remove-Item Env:TEST_SUITES` depois. A atribuição inline acima é de Bash.
+Remova `TEST_SUITES` para executar todas as suítes.
 
-Pré-requisito: `docker compose up -d --build` já rodando (seção 0).
+## 2. Suíte por requisito
 
-| Requisito do desafio | Seção | Comando |
+A coluna abaixo identifica a suíte a selecionar em `TEST_SUITES` pelo comando Docker da seção 1.
+Os nomes não são instruções para rodar os executores diretamente no banco da aplicação.
+O Compose de testes cria seu próprio ambiente; a aplicação da seção 0 não precisa estar ativa.
+
+| Requisito do desafio | Seção | Suíte (`TEST_SUITES`) |
 |---|---|---|
-| Money: escala, arredondamento, entradas inválidas, conflito de moeda | 6.1, 13 | `bun test test/money.test.ts` |
-| Invariantes da Wallet (saldo nunca negativo, version) | 6.2, 13 | `bun test test/wallet.test.ts` |
-| payloadHash / idempotency key com payload divergente | 6.3, 9, 13 | `bun test test/hash.test.ts` |
-| Transições terminais, OPENING interno, Inbox/Outbox | 6.3, 6.5 | `bun test test/domain-transitions.test.ts` |
-| Migrations, constraints, atomicidade wallet+ledger+inbox+outbox | 5, 11, 13 | `bun run test:integration` |
-| Falha real de INSERT na Outbox → rollback completo + retry | 11 | `bun run test:atomicity` |
-| Inbox/redelivery, publishers concorrentes sobre a mesma outbox | 10, 11, 13 | `bun run test:messaging` |
-| REFUND/ROLLBACK/WIN fora de ordem (PENDING_REFERENCE) | 7.1 | `bun run test:references` |
-| Wallets distintas processadas em paralelo | 8, 13 | `bun run test:parallel-wallets` |
-| Replay HTTP→SQS, mensagens concorrentes com hashes diferentes | 10, 11 | `bun run test:inbox-replay` |
-| Worker morto (SIGKILL) depois do commit, antes do ACK; reinício real com replay preservado | 10, 11, 13 | `bun run test:crash-recovery` |
-| SIGTERM com mensagem em andamento: termina, ACK, sai limpo | 10 | `bun run test:sigterm` |
-| Retry/backoff real do consumer; JSON malformado direto à DLQ | 10, 13 | `bun run test:consumer-retry` |
-| Falha persistente esgota 5 tentativas reais → DLQ real (RedrivePolicy) | 10, 13 | `bun run test:consumer-dlq-persistent` (~70s) |
-| **Cenário obrigatório da seção 8**: 100,00 − 80,00 − 80,00 simultâneas, 50x replay | 8, 13 | `bun run test:race` |
-| Mesmo cenário acima, mas com **3 processos HTTP independentes** | 8, 13 | `bun run test:3instances` |
+| Money: escala, arredondamento, entradas inválidas, conflito de moeda | 6.1, 13 | `test` |
+| Invariantes da Wallet (saldo nunca negativo, version) | 6.2, 13 | `test` |
+| payloadHash canônico | 6.3, 9 | `test` |
+| Idempotency key com payload divergente | 9, 13 | `test:integration` |
+| Transições terminais, OPENING interno, Inbox/Outbox | 6.3, 6.5 | `test` |
+| Migrations, constraints, atomicidade wallet+ledger+inbox+outbox | 5, 11, 13 | `test:integration` |
+| Falha real de INSERT na Outbox → rollback completo + retry | 11 | `test:atomicity` |
+| Inbox/redelivery, publishers concorrentes sobre a mesma outbox | 10, 11, 13 | `test:messaging` |
+| REFUND/WIN fora de ordem (PENDING_REFERENCE) | 7.1 | `test:references` |
+| Wallets distintas processadas em paralelo | 8, 13 | `test:parallel-wallets` |
+| Replay HTTP→SQS, mensagens concorrentes com hashes diferentes | 10, 11 | `test:inbox-replay` |
+| Worker morto (SIGKILL) depois do commit, antes do ACK; reinício real com replay preservado | 10, 11, 13 | `test:crash-recovery` |
+| SIGTERM com mensagem em andamento: termina, ACK, sai limpo | 10 | `test:sigterm` |
+| Retry/backoff real do consumer; JSON malformado direto à DLQ | 10, 13 | `test:consumer-retry` |
+| Falha persistente esgota 5 tentativas reais → DLQ real (RedrivePolicy) | 10, 13 | `test:consumer-dlq-persistent` (~70s) |
+| **Cenário obrigatório da seção 8**: 100,00 − 80,00 − 80,00 simultâneas, 50x replay | 8, 13 | `test:race` |
+| Mesmo cenário acima, mas com **3 processos HTTP independentes** | 8, 13 | `test:3instances` |
 
 ## 3. Checar manualmente pela API (sem rodar nenhum teste)
+
+Os exemplos a seguir são de Bash e exigem substituir os placeholders. Para uma demonstração
+com IDs gerados automaticamente em Bash ou PowerShell, siga o [README](../README.md#demonstrações-pelo-backend).
 
 ```bash
 # Criar wallet
@@ -81,22 +92,33 @@ curl "http://localhost:3001/wallets/<walletId>/ledger?limit=50"
 curl http://localhost:3001/health/metrics
 ```
 
-## 4. Demonstração via SQS real (sem HTTP)
+## 4. Demonstração de uma BET via SQS real
 
 ```bash
-bun run queues:init     # garante as 3 filas FIFO no LocalStack
-bun run start:worker    # em outro terminal — obrigatório, sem worker o script abaixo falha
-bun run demo:sqs        # publica 1 mensagem real na fila de entrada e confirma o processamento
+docker compose exec -e BASE_URL=http://127.0.0.1:3000 api1 bun run demo:sqs
 ```
+
+Esperado: `result: PASS`, `via: SQS`, saldo `75.00`. O script cria a wallet por HTTP,
+envia a BET pelo SQS e consulta o saldo. Os workers já estão ativos no Compose.
 
 ## 5. Diferencial opcional — teste de carga
 
 Não implementado neste projeto (documentado em `README.md`/`ARCHITECTURE.md` como não medido — não
 há `bun run test:load`).
 
+Depois dos testes, copie os logs se necessário e descarte somente o projeto de testes:
+
+```bash
+docker compose -f docker-compose.test.yml cp tests:/artifacts ./artifacts
+docker compose -f docker-compose.test.yml down --volumes
+```
+
+Os scripts de corrida terminam em `19.00`: primeiro verificam a disputa de 80+80 sobre 100
+(saldo `20.00`, um débito), depois uma BET de 1 repetida 50 vezes (saldo `19.00`, dois débitos).
+
 ## 6. Frontend (fora da nota, mas útil para apresentar visualmente os itens acima)
 
-**Via Docker (único pré-requisito: Docker + Docker Compose; roda em qualquer máquina)** — já incluído
+**Via Docker (único pré-requisito: Docker + Docker Compose; usa containers Linux em hosts compatíveis)** — já incluído
 no `docker compose up -d --build` do passo 0, que agora também builda e sobe o frontend
 (`frontend/Dockerfile`, build com Bun + servido por nginx, com proxy interno para `api1`/`api2`/`api3`
 pelo nome do serviço na rede do compose):

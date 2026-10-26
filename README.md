@@ -10,13 +10,16 @@
 
 Desafio técnico da Jungle Gaming: um serviço financeiro que recebe apostas de provedores de jogo (via HTTP e via SQS), aplica o resultado no saldo de uma wallet e mantém um ledger auditável de cada movimentação — permanecendo correto mesmo quando mensagens chegam duplicadas, fora de ordem, ou quando o processo morre no meio do caminho.
 
-Este README documenta o que o código **de fato faz**, não o que o enunciado pedia. Onde há diferença entre os dois, ela está marcada explicitamente nas seções [Limitações](#limitações-e-próximos-passos) e [Decisões arquiteturais](#decisões-arquiteturais-e-trade-offs).
+Comece pelo roteiro abaixo para executar e avaliar o backend. As decisões e os limites da implementação estão nas seções [Limitações](#limitações-e-próximos-passos) e [Decisões arquiteturais](#decisões-arquiteturais-e-trade-offs).
 
 ## Índice
 
+- [Início rápido](#início-rápido)
+- [Roteiro de avaliação](#roteiro-de-avaliação)
+- [Demonstrações pelo backend](#demonstrações-pelo-backend)
+- [Suíte completa](#suíte-completa)
 - [O que este projeto resolve](#o-que-este-projeto-resolve)
 - [Arquitetura](#arquitetura)
-- [Como executar localmente](#como-executar-localmente)
 - [Estrutura do projeto](#estrutura-do-projeto)
 - [Modelagem financeira e domínio](#modelagem-financeira-e-domínio)
 - [Operações de negócio](#operações-de-negócio)
@@ -32,7 +35,223 @@ Este README documenta o que o código **de fato faz**, não o que o enunciado pe
 - [Decisões arquiteturais e trade-offs](#decisões-arquiteturais-e-trade-offs)
 - [Aprendizados técnicos](#aprendizados-técnicos)
 - [Limitações e próximos passos](#limitações-e-próximos-passos)
+- [Desenvolvimento local e comandos](#desenvolvimento-local-e-comandos)
 - [Documentação complementar](#documentação-complementar)
+
+---
+
+## Início rápido
+
+Execute os comandos na **raiz do repositório**, onde está `docker-compose.yml`.
+
+**Pré-requisitos:** Git para obter o projeto e Docker Engine com Compose v2, ou Docker Desktop no modo **Linux containers**, com memória/disco disponíveis. O primeiro build precisa de Internet para baixar imagens e dependências. Bun, Node.js, PostgreSQL e ferramentas AWS não precisam estar instalados no host.
+
+```bash
+git clone https://github.com/FelipeSegatto/jungle-challenge.git
+cd jungle-challenge
+docker info --format "{{.OSType}}"
+docker compose version
+docker compose up -d --build --wait
+docker compose ps
+```
+
+Se já tiver o checkout, comece em `docker info`. O tipo do Docker deve ser `linux`. O Compose aplica as migrations e inicia PostgreSQL, LocalStack/SQS, **três APIs, dois workers e o frontend**. O serviço `migrate` terminar com código `0` é normal; APIs, workers e infraestrutura devem ficar `healthy`. O frontend não possui health check próprio; confirme que a página abre.
+
+| Acesso padrão | Finalidade | Verificação esperada |
+|---|---|---|
+| http://localhost:5173 | Console frontend opcional | Interface abre; requisições passam pelo nginx para as três APIs |
+| http://localhost:3001/health/live | API 1 viva | HTTP `200`, `status: ok` |
+| http://localhost:3001/health/ready | API 1 e dependências prontas | HTTP `200`, PostgreSQL e SQS `ok` |
+| http://localhost:3002/health/ready e http://localhost:3003/health/ready | APIs 2 e 3 | HTTP `200` |
+| http://localhost:9091/health/ready e http://localhost:9092/health/ready | Bootstrap dos workers concluído | HTTP `200` |
+
+Os comandos Docker desta página funcionam em Bash e PowerShell; os exemplos específicos de shell estão identificados. Não é necessário copiar `.env` para usar o Compose: ele usa `.env.docker`, já versionado para o ambiente local. As credenciais locais de demonstração não são credenciais de produção.
+
+Se uma porta estiver ocupada, ajuste `FRONTEND_PORT`, `API1_PORT`, `API2_PORT`, `API3_PORT`, `WORKER1_PORT`, `WORKER2_PORT`, `PG_PORT` ou `SQS_PORT` no ambiente antes de subir e use a nova porta nos acessos. Para preparar as imagens antes da avaliação e diagnosticar problemas, consulte o [roteiro Docker](docs/DEMONSTRACAO_DOCKER.md).
+
+## Roteiro de avaliação
+
+Siga a ordem: **subir a aplicação → demonstrar HTTP/SQS → executar a suíte completa → inspecionar as decisões e o schema**. A interface é uma forma adicional de visualizar o backend; as garantias de concorrência, atomicidade e recuperação têm testes automatizados próprios.
+
+Na tabela, os nomes `test:*` identificam suítes incluídas na [validação completa](#suíte-completa). Para executar apenas uma delas com infraestrutura isolada, veja [Selecionar cenários](#selecionar-cenários). Não é necessário executar manualmente cada arquivo de teste.
+
+| Requisito / critério do desafio | Comando ou evidência | Resultado esperado |
+|---|---|---|
+| Stack e execução reproduzível | Comandos do início rápido; `Dockerfile`, `docker-compose.yml`, `package.json` | Bun/NestJS, PostgreSQL e SQS reais; 3 APIs e 2 workers prontos |
+| Money exato, moedas e invariantes de domínio | Suíte `test`; [modelagem](#modelagem-financeira-e-domínio) | Strings decimais, operações exatas, entradas/moedas inválidas rejeitadas e transições terminais protegidas |
+| OPENING e unicidade da wallet | `test:integration`; [demonstração HTTP](#demonstrações-pelo-backend) | Abertura de 100 gera um CREDIT; duplicata de player/moeda conflita |
+| BET, WIN, LOSS, REFUND e ROLLBACK | `test:integration` e `test`; [regras](#operações-de-negócio) | Débitos/créditos corretos; LOSS e rejeições sem ledger financeiro; reversões respeitam referência e saldo |
+| Cenário obrigatório: duas BETs de 80 sobre 100 | `test:integration`, `test:race`, `test:3instances` | Uma `PROCESSED`, outra `REJECTED`; saldo 20 e um débito antes da etapa adicional de replay |
+| Idempotência persistente e payload conflitante | `test:integration`, `test:inbox-replay`, `test:3instances` | 50 envios iguais têm um efeito; replay preserva o resultado original; mesma chave com outro payload retorna `409` |
+| Paralelismo entre wallets e ≥ 3 instâncias | `test:parallel-wallets`, `test:3instances` | Saldos/ledgers corretos por wallet; corrida e replay distribuídos entre três processos HTTP |
+| Referências fora de ordem e limite de retries | `test:references`, `test:integration` | `202 PENDING_REFERENCE`; REFUND/WIN processados após BET; referência ausente acaba `REJECTED` com código estável |
+| Atomicidade de wallet, wager, ledger, inbox e outbox | `test:atomicity` | Erro real de INSERT na Outbox reverte todas as gravações; retry posterior aplica uma vez |
+| Inbox, redelivery e ACK depois do commit | `test:inbox-replay`, `test:crash-recovery`, `test:messaging` | Reentrega sem novo efeito; ACK confirmado depois do commit, inclusive após morte do worker |
+| Outbox e publishers concorrentes | `test:messaging`, `test:crash-recovery` | Evento confirmado é recuperado/publicado; publishers não perdem eventos; envelopes conferidos na fila |
+| Retry, backoff e DLQ | `test:consumer-retry`, `test:consumer-dlq-persistent` | Rejeição de negócio recebe ACK; JSON inválido vai à DLQ; falha persistente tem cinco recepções antes do redrive |
+| Recuperação e encerramento gracioso | `test:crash-recovery`, `test:sigterm` | SIGKILL depois do commit não duplica débito; reinício preserva replay; SIGTERM conclui mensagem, dá ACK e sai `0` |
+| Ledger auditável, constraints e reconciliação | `test:integration`; consultas HTTP abaixo; [schema](#postgresql-acid-e-integridade) | Banco rejeita adulteração do ledger; saldo reconstruído coincide com o armazenado; diferença `0.00` |
+| Contratos HTTP e consultas | `test:integration`; [API](#api--endpoints-e-exemplos) e [códigos de falha](#códigos-de-falha-usados-pelo-projeto) | Distinção entre payload inválido, conflito, rejeição e pendência; consulta por IDs e ledger com cursor |
+| Observabilidade | Comandos de logs/métricas abaixo; [observabilidade](#observabilidade) | Health separado, logs JSON e métricas de transações, duplicatas, retries, DLQ, locks, outbox lag e latência |
+| Modelagem, migrations e decisões | `src/domain/`, `src/infrastructure/migrations/`, [ARCHITECTURE.md](ARCHITECTURE.md) | Factories/rehydrate, invariantes encapsuladas, migrations com `up`/`down`, justificativas e limites explícitos |
+| Autenticação e itens opcionais | [Limitações](#limitações-e-próximos-passos) | Guard no-op e desenho documentados; carga e tracing distribuído não são apresentados como implementados |
+
+A suíte aplica migrations em banco novo e testa constraints. A reversibilidade das migrations e a separação das camadas também devem ser inspecionadas nos arquivos e no registro de validação; não são demonstradas apenas por um `PASS` de teste. A matriz detalhada está em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md).
+
+## Demonstrações pelo backend
+
+### HTTP: wallet, BET, replay, ledger e reconciliação
+
+Com a aplicação pronta, escolha **um** dos exemplos abaixo. Ambos criam identificadores novos, portanto podem ser repetidos sem apagar o banco. Eles usam a API da aplicação, não o banco de testes.
+
+**PowerShell:**
+
+```powershell
+. ./scripts/demo.ps1
+Invoke-RestMethod "http://localhost:3001/wallets/$($wallet.id)/ledger?limit=50"
+Invoke-RestMethod "http://localhost:3001/wagering/transactions/$($result.transactionId)"
+```
+
+O ponto inicial executa o script no escopo atual, permitindo usar `$wallet` e `$result` nas consultas seguintes.
+
+**Bash:** o Bun do container funciona como cliente HTTP; não exige Bun ou `jq` no host.
+
+```bash
+docker compose exec -T api1 bun - <<'JS'
+const base = "http://127.0.0.1:3000";
+async function request(path, body, key) {
+  const response = await fetch(base + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify({ http: response.status, data }));
+  return data;
+}
+const playerId = crypto.randomUUID();
+const wallet = await request("/wallets", {
+  playerId, initialBalance: { amount: "100.00", currency: "BRL" },
+});
+const externalTransactionId = crypto.randomUUID();
+const key = "demo:" + externalTransactionId;
+const body = {
+  providerId: "demo", externalTransactionId, playerId, walletId: wallet.id,
+  roundId: "round-demo", gameId: "game-demo", kind: "BET",
+  money: { amount: "25.00", currency: "BRL" },
+};
+const bet = await request("/wagering/transactions", body, key);
+const replay = await request("/wagering/transactions", body, key);
+const transaction = await request("/wagering/transactions/" + bet.transactionId);
+const ledger = await request("/wallets/" + wallet.id + "/ledger?limit=50");
+const reconciliation = await request("/wallets/" + wallet.id + "/reconciliation", {});
+console.log(JSON.stringify({ wallet, bet, replay, transaction, ledger, reconciliation }, null, 2));
+if (bet.balance.amount !== "75.00" || !replay.idempotentReplay ||
+    replay.transactionId !== bet.transactionId || ledger.items.length !== 2 ||
+    !reconciliation.consistent || reconciliation.difference.amount !== "0.00") {
+  throw new Error("DEMO_FAILED");
+}
+console.log("DEMO PASSOU");
+JS
+```
+
+| Etapa | Resultado esperado | Garantia demonstrada |
+|---|---|---|
+| Criar wallet com 100 | Saldo `100.00`, versão `1`, lançamento OPENING de crédito | Abertura auditável |
+| BET de 25 | `PROCESSED`, saldo `75.00` | Débito e regra financeira |
+| Reenviar a mesma BET | Mesmo `transactionId`, `idempotentReplay: true`, saldo original `75.00` | Replay sem novo débito |
+| Consultar transação e ledger | Transação processada; dois lançamentos: CREDIT de 100 e DEBIT de 25 | Histórico auditável |
+| Reconciliar | `consistent: true`, diferença `0.00` | Saldo materializado igual ao reconstruído |
+
+Para exercitar as outras operações, conflitos e pendências, use as suítes da matriz ou os contratos da seção [API](#api--endpoints-e-exemplos). A demonstração curta acima não substitui essas verificações.
+
+### SQS: processamento assíncrono real
+
+```bash
+docker compose exec -e BASE_URL=http://127.0.0.1:3000 api1 bun run demo:sqs
+```
+
+Esperado: `result: PASS`, `via: SQS`, saldo `75.00`. O script cria uma wallet de 100 por HTTP, envia uma BET de 25 para a fila real do LocalStack e consulta o saldo até o worker processar. Os workers já foram iniciados pelo Compose; não abra outro worker manualmente.
+
+**DLQ** é a fila que recebe mensagens que não podem ser processadas; **SIGTERM** é o sinal de solicitação de encerramento gracioso. Os testes reproduzem essas situações em infraestrutura descartável. Não é necessário matar workers nem inserir mensagens inválidas na aplicação usada para a demonstração.
+
+### Observabilidade: prontidão, logs e métricas
+
+Abra http://localhost:3001/health/metrics e http://localhost:9091/metrics para ver o texto Prometheus. As métricas são locais a cada processo; um contador zero na API não prova que o worker não processou mensagens.
+
+```bash
+docker compose logs --tail=50 api1 worker1 worker2
+```
+
+Esperado: logs estruturados de requisições/processamento, com identificadores de correlação quando aplicáveis. Os health checks estão listados no início rápido. A readiness do worker indica bootstrap concluído; a da API consulta banco e SQS.
+
+### Frontend opcional
+
+Abra http://localhost:5173. **Guided Demo**, **Distributed Lab**, **Ledger & Reconciliation** e **System Health** permitem visualizar operações, replay, concorrência e saúde das APIs. O [README do frontend](frontend/README.md) explica as telas e os limites: asserções visuais e testes de componentes não substituem as provas de falha/recuperação do backend.
+
+## Suíte completa
+
+Na raiz do repositório, execute:
+
+```bash
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
+```
+
+Esse comando é independente da aplicação: pode ser executado mesmo sem o Compose principal ativo. Executa `format:check`, typecheck, migrations e todas as suítes do backend, com PostgreSQL/SQS exclusivos e três processos HTTP reais em Linux. Não publica portas de teste nem usa o banco/filas/volumes da demonstração.
+
+**Sucesso esperado:** `PASS: isolated checks completed` e saída **`0`** do serviço `tests`. Qualquer teste reprovado deve produzir saída diferente de zero. O último registro de validação contém **57 testes e dois scripts de concorrência**; o resultado da execução atual é a evidência para o checkout que está sendo avaliado. O teste de falha persistente leva cerca de 70 segundos por respeitar o backoff real; reserve alguns minutos além do build inicial.
+
+### Por que aparecem saldos 20,00 e 19,00?
+
+Os scripts `test:race` e `test:3instances` executam duas etapas na mesma wallet:
+
+1. Partem de **100,00** e disputam duas BETs de **80,00**: somente uma passa, deixando **20,00** e um débito. Este é o cenário obrigatório do desafio; `test:integration` também o verifica separadamente.
+2. Enviam uma nova BET de **1,00**, com a mesma chave/payload, **50 vezes em paralelo**: ocorre somente mais um débito, deixando **19,00**, dois débitos no total e reconciliação consistente. O OPENING é um lançamento de crédito adicional.
+
+Portanto, `balance: 19.00` no resumo final desses scripts é o resultado das duas etapas, não uma divergência do cenário de 20,00.
+
+### Selecionar cenários
+
+Escolha os nomes na matriz. Por exemplo, para crash/reinício e SIGTERM:
+
+**Bash:**
+
+```bash
+TEST_SUITES=test:crash-recovery,test:sigterm docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
+```
+
+**PowerShell:**
+
+```powershell
+$env:TEST_SUITES = 'test:crash-recovery,test:sigterm'
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
+Remove-Item Env:TEST_SUITES
+```
+
+Para executar a suíte completa, `TEST_SUITES` deve estar ausente ou vazio. Remova o projeto de testes entre execuções para descartar a infraestrutura anterior.
+
+### Diagnóstico e limpeza
+
+Em caso de falha, copie os logs antes de remover os containers:
+
+```bash
+docker compose -f docker-compose.test.yml logs --no-color
+docker compose -f docker-compose.test.yml cp tests:/artifacts ./artifacts
+```
+
+Depois de executar os testes:
+
+```bash
+docker compose -f docker-compose.test.yml down --volumes
+```
+
+Isso remove apenas a infraestrutura descartável de testes. Para parar a aplicação e preservar o banco da demonstração:
+
+```bash
+docker compose down
+```
+
+Não acrescente `--volumes` ao comando da aplicação se quiser preservar os dados. Os testes do frontend são separados: a imagem nginx serve o build e não executa testes; veja os comandos em [frontend/README.md](frontend/README.md#testes).
 
 ---
 
@@ -40,7 +259,7 @@ Este README documenta o que o código **de fato faz**, não o que o enunciado pe
 
 Um provedor de jogo (um cassino, uma mesa de apostas, um motor de slot) envia operações associadas a uma rodada: `BET` (apostou), `WIN` (ganhou), `LOSS` (perdeu), `REFUND` (o provedor cancelou a aposta) e `ROLLBACK` (uma operação anterior precisa ser desfeita). Cada uma dessas operações move dinheiro de verdade — ou decide não mover, no caso de `LOSS`.
 
-O problema não é CRUD. O enunciado original (`challenge.md`) é explícito sobre isso: a entrega das mensagens é **at-least-once**. Isso significa, na prática, que o sistema precisa continuar correto quando:
+O problema não é CRUD. O enunciado original é explícito sobre isso: a entrega das mensagens é **at-least-once**. Isso significa, na prática, que o sistema precisa continuar correto quando:
 
 - a mesma operação chega duas, três, cinquenta vezes;
 - uma `WIN` chega antes da `BET` que ela referencia;
@@ -121,118 +340,6 @@ flowchart LR
 | **Infrastructure** | Persistência (entidades MikroORM, migrations), mensageria (cliente SQS, consumer, publisher de outbox, worker de referências), métricas e logging | `src/infrastructure/entities/rows.ts`, `migrations/`, `sqs/`, `workers/`, `metrics.ts`, `observability/` | Tudo que fala com o mundo externo (banco, fila, relógio do sistema) fica isolado aqui, para que o domínio não precise saber que existe um Postgres do outro lado. |
 
 Por que a regra de negócio não pode ficar concentrada no controller: o controller é o lugar onde o contrato HTTP muda (um header novo, um código de status diferente). A regra financeira — "BET debita, LOSS não move nada, REFUND exige referência" — não deveria mudar só porque o transporte mudou. Prova prática disso: o consumidor SQS (`src/infrastructure/workers/consumer.ts`) não duplica nenhuma regra; ele monta o mesmo DTO e chama `new WagerService(em).process(...)`.
-
----
-
-## Execução e testes pelo Docker
-
-No Windows, macOS ou Linux com Docker em modo Linux e Compose v2, o backend pode ser apresentado sem Bun/Node instalados no computador:
-
-```bash
-docker compose up -d --build --wait
-docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
-```
-
-O primeiro comando sobe a aplicação e aguarda os health checks. O segundo executa Bun, testes, três APIs e workers em Linux, com PostgreSQL/SQS exclusivos. Não usa Bun nativo do Windows, não publica portas de teste e não toca no banco da apresentação. Ao concluir, remova só o projeto de testes com `docker compose -f docker-compose.test.yml down --volumes`.
-
-O [roteiro Docker](docs/DEMONSTRACAO_DOCKER.md) reúne preparação offline, resultados esperados, demonstração SQS e limpeza. A [matriz de validação](docs/BACKEND_VALIDATION.md) relaciona as suítes aos requisitos. O modo nativo `bun run test:isolated` continua disponível para desenvolvimento Linux/WSL.
-
-## Como executar localmente
-
-### Pré-requisitos
-
-- Docker Desktop (ou Docker Engine + Compose) rodando.
-- [Bun](https://bun.sh) 1.4.4 instalado no host, se você quiser rodar testes ou a API fora do container.
-- PowerShell (os exemplos abaixo são para Windows; os comandos de `bun`/`docker` funcionam iguais em Bash).
-
-### Opção 1 — Tudo no Docker Compose (mais simples)
-
-```powershell
-docker compose up -d --build --wait
-docker compose ps
-```
-
-Isso sobe, conforme definido em `docker-compose.yml`: `postgres` (porta `55432` no host, `5432` dentro da rede), `localstack` (porta `4566`), um serviço `migrate` que roda `bun run migration:up` e sai, três instâncias da API (`api1`, `api2`, `api3`, mapeadas para `3001`, `3002`, `3003`) e dois workers (`worker1`, `worker2`, com métricas em `9091`/`9092`). APIs e workers usam a mesma imagem local; os workers têm `/health/ready` em sua porta de métricas, respondendo 503 até concluir o bootstrap e 200 quando prontos.
-
-```powershell
-Invoke-RestMethod http://localhost:3001/health/live
-Invoke-RestMethod http://localhost:3001/health/ready
-powershell -ExecutionPolicy Bypass -File .\scripts\demo.ps1
-```
-
-`health/ready` só responde 200 quando PostgreSQL **e** SQS estão alcançáveis (`src/infrastructure/sqs/health.ts` + uma query `SELECT 1`).
-
-### Opção 2 — API no host, infraestrutura no Docker
-
-Para rodar a API diretamente com Bun no Windows (útil para depurar com breakpoint) e só a infraestrutura em container:
-
-```powershell
-Copy-Item .env.example .env
-bun install --frozen-lockfile
-docker compose up -d postgres localstack
-bun run migration:up
-bun run queues:init
-bun run dev
-```
-
-Em outro terminal, o worker (consumer SQS + publisher de outbox + retry de referências):
-
-```powershell
-bun run start:worker
-```
-
-**Por que isso importa — a diferença entre host e rede Docker:** dentro do `docker-compose.yml`, os serviços se enxergam pelo nome (`postgres`, `localstack`), porque o Compose cria uma rede interna com DNS próprio. É por isso que `.env.docker` (usado pelos containers `api1/2/3` e `worker1/2`) tem `DATABASE_URL=postgresql://jungle:jungle@postgres:5432/jungle_wagering` — `postgres` ali é um hostname que só existe dentro dessa rede.
-
-Quando você roda `bun run dev` direto no Windows, o processo Bun não está dentro dessa rede — ele está no host. Por isso `.env.example` (que você copia para `.env` para rodar fora do Docker) aponta para `DATABASE_URL=postgresql://jungle:jungle@127.0.0.1:55432/jungle_wagering`: `127.0.0.1:55432` é a porta que o `docker-compose.yml` expõe ao host (`"${PG_PORT:-55432}:5432"`), não a porta interna `5432`. Confundir os dois é a causa mais comum de `ECONNREFUSED`/`getaddrinfo ENOTFOUND postgres` ao rodar fora do Docker.
-
-Para simular as 3 instâncias fora do Docker:
-
-```powershell
-$env:PORT='3001'; bun run start
-# em outros dois terminais: PORT 3002 e 3003
-```
-
-Nunca misture os dois modos nas mesmas portas — ou a API do Compose, ou a do host, não as duas ao mesmo tempo.
-
-### Comandos disponíveis (de `package.json`)
-
-| Comando | Faz o quê |
-|---|---|
-| `bun run dev` | API com watch (`src/main.ts`) |
-| `bun run start` | API sem watch |
-| `bun run start:worker` | Consumer SQS + publisher de Outbox + retry de referências (`src/worker-main.ts`) |
-| `bun run typecheck` | `tsc --noEmit`, TypeScript estrito |
-| `bun run migration:up` / `migration:down` / `migration:pending` | Aplica, reverte ou lista migrations via MikroORM CLI |
-| `bun run queues:init` | Cria as 3 filas SQS no LocalStack (`scripts/init-queues.ts`) |
-| `bun run test` | Domínio, transições de Wager/Inbox/Outbox, hash e proteção dos destinos de teste — sem banco |
-| `bun run test:integration` | HTTP + PostgreSQL reais (`test/integration.test.ts`) |
-| `bun run test:messaging` | PostgreSQL + LocalStack reais: inbox, outbox, DLQ, redelivery (`test/messaging.test.ts`) |
-| `bun run test:references` | Referências fora de ordem (`test/references.test.ts`) |
-| `bun run test:race` | Script standalone: 2 BETs concorrentes + 50x replay via HTTP (`scripts/race.ts`) |
-| `bun run test:3instances` | Mesmo cenário, mas contra 3 processos HTTP independentes (`scripts/race-three.ts`) |
-| `bun run test:all` / `test:docker` | Atalho para a suíte Linux em `docker-compose.test.yml`; o comando Docker direto dispensa Bun no host |
-| `bun run test:isolated <suíte...>` | Modo nativo Linux/WSL, com infraestrutura isolada; exemplo: `bun run test:isolated test:atomicity test:crash-recovery` |
-| `bun run test:atomicity` | Executor interno: falha real de INSERT na Outbox, rollback integral e retry seguro (`test/atomicity.test.ts`) |
-| `bun run test:inbox-replay` | Executor interno: HTTP→SQS, inbox única e conflitos concorrentes de envelope |
-| `bun run test:parallel-wallets` | Executor interno: seis wallets com operações paralelas e reconciliação por wallet |
-| `bun run test:crash-recovery` / `test:sigterm` | Executores internos: SIGKILL, reentrega, reinício da API e encerramento gracioso |
-| `bun run test:consumer-retry` / `test:consumer-dlq-persistent` | Executores internos: retry/backoff observado e redrive real até a DLQ |
-| `bun run demo:sqs` | Demonstração ponta a ponta via SQS (`scripts/demo-sqs.ts`) |
-| `bun run format` / `format:check` | Prettier |
-
-Os executores individuais de integração são usados pelo runner. Para apresentação, prefira o Compose de testes; em desenvolvimento Linux/WSL, use `bun run test:isolated <suíte>`: o guard exige banco de teste, SQS local e origens HTTP locais explícitas. Os scripts standalone de corrida também recusam destinos remotos ou ausentes; para três instâncias, exigem três origens locais distintas. O runner preenche essas configurações automaticamente.
-
-### Troubleshooting
-
-| Sintoma | Causa provável | Solução |
-|---|---|---|
-| `password authentication failed for user "jungle"` | `.env` com credenciais diferentes das do `docker-compose.yml` (`jungle`/`jungle`), ou um Postgres antigo na porta 5432 do Windows interferindo | Confirme `.env` contra `.env.example`; o Compose já expõe o Postgres em `55432` exatamente para não brigar com um Postgres local na 5432 |
-| `getaddrinfo ENOTFOUND postgres` ao rodar `bun run migration:*`/testes do host | `.env` copiado de `.env.docker` em vez de `.env.example` — `postgres` só resolve dentro da rede do Compose | Use `.env.example` como base para rodar fora do Docker (host `127.0.0.1:55432`) |
-| `address already in use` nas portas 3000-3003, 55432 ou 4566 | Outro processo (ou uma execução anterior não finalizada) ainda ocupando a porta | `docker compose ps`, ou localizar o processo com `Get-NetTCPConnection -LocalPort <porta>` no PowerShell |
-| `bun run migration:pending` lista as duas migrations mesmo após `up` | Rodou contra um banco diferente do que `.env`/`.env.docker` apontam | Confira `DATABASE_URL` — é fácil rodar o CLI contra o banco errado quando se alterna entre os dois modos de execução |
-| `/health/ready` sempre 503 | PostgreSQL ou LocalStack ainda não estão de pé, ou as filas não foram criadas | `docker compose ps` (ambos devem estar `healthy`); se for rodar fora do Docker, `bun run queues:init` precisa ter sido executado |
-| `TypeError: ... is not a function` vindo do MikroORM | Chamada a um método que não existe na versão instalada (ex.: `em.persistAndFlush`, removido no MikroORM 7) | Ver [Aprendizados técnicos](#aprendizados-técnicos) — esse caso específico já aconteceu neste projeto e foi corrigido em `src/application/services.ts` |
-| Erro de tipo do AWS SDK em `AttributeNames` | Nome de campo mudou entre versões do `@aws-sdk/client-sqs`; `ApproximateReceiveCount` migrou para `MessageSystemAttributeNames` | Já corrigido em `src/infrastructure/workers/consumer.ts`; se aparecer de novo após atualizar o SDK, é o mesmo tipo de problema |
 
 ---
 
@@ -976,8 +1083,87 @@ Alguns problemas só apareceram rodando o projeto de verdade contra Postgres e L
 
 ---
 
+## Desenvolvimento local e comandos
+
+O caminho de avaliação recomendado é o [Docker](#início-rápido). Esta alternativa exige Bun 1.4.4 no host e Docker para PostgreSQL/SQS. Para validar sinais POSIX e a suíte completa, use containers Linux; o comportamento de Bun nativo no Windows pode diferir. Os exemplos desta seção usam PowerShell.
+
+### API no host, infraestrutura no Docker
+
+Para rodar a API diretamente com Bun no Windows (útil para depurar com breakpoint) e só a infraestrutura em container:
+
+```powershell
+Copy-Item .env.example .env
+bun install --frozen-lockfile
+docker compose up -d postgres localstack
+bun run migration:up
+bun run queues:init
+bun run dev
+```
+
+Em outro terminal, o worker (consumer SQS + publisher de outbox + retry de referências):
+
+```powershell
+bun run start:worker
+```
+
+**Por que isso importa — a diferença entre host e rede Docker:** dentro do `docker-compose.yml`, os serviços se enxergam pelo nome (`postgres`, `localstack`), porque o Compose cria uma rede interna com DNS próprio. É por isso que `.env.docker` (usado pelos containers `api1/2/3` e `worker1/2`) tem `DATABASE_URL=postgresql://jungle:jungle@postgres:5432/jungle_wagering` — `postgres` ali é um hostname que só existe dentro dessa rede.
+
+Quando você roda `bun run dev` direto no Windows, o processo Bun não está dentro dessa rede — ele está no host. Por isso `.env.example` (que você copia para `.env` para rodar fora do Docker) aponta para `DATABASE_URL=postgresql://jungle:jungle@127.0.0.1:55432/jungle_wagering`: `127.0.0.1:55432` é a porta que o `docker-compose.yml` expõe ao host (`"${PG_PORT:-55432}:5432"`), não a porta interna `5432`. Confundir os dois é a causa mais comum de `ECONNREFUSED`/`getaddrinfo ENOTFOUND postgres` ao rodar fora do Docker.
+
+Para simular as 3 instâncias fora do Docker:
+
+```powershell
+$env:PORT='3001'; bun run start
+# em outros dois terminais: PORT 3002 e 3003
+```
+
+Nunca misture os dois modos nas mesmas portas — ou a API do Compose, ou a do host, não as duas ao mesmo tempo.
+
+### Comandos disponíveis (de `package.json`)
+
+| Comando | Faz o quê |
+|---|---|
+| `bun run dev` | API com watch (`src/main.ts`) |
+| `bun run start` | API sem watch |
+| `bun run start:worker` | Consumer SQS + publisher de Outbox + retry de referências (`src/worker-main.ts`) |
+| `bun run typecheck` | `tsc --noEmit`, TypeScript estrito |
+| `bun run migration:up` / `migration:down` / `migration:pending` | Aplica, reverte ou lista migrations via MikroORM CLI |
+| `bun run queues:init` | Cria as 3 filas SQS no LocalStack (`scripts/init-queues.ts`) |
+| `bun run test` | Domínio, transições de Wager/Inbox/Outbox, hash e proteção dos destinos de teste — sem banco |
+| `bun run test:integration` | HTTP + PostgreSQL reais (`test/integration.test.ts`) |
+| `bun run test:messaging` | PostgreSQL + LocalStack reais: inbox, outbox, DLQ, redelivery (`test/messaging.test.ts`) |
+| `bun run test:references` | Referências fora de ordem (`test/references.test.ts`) |
+| `bun run test:race` | Script standalone: 2 BETs concorrentes + 50x replay via HTTP (`scripts/race.ts`) |
+| `bun run test:3instances` | Mesmo cenário, mas contra 3 processos HTTP independentes (`scripts/race-three.ts`) |
+| `bun run test:all` / `test:docker` | Atalho para a suíte Linux em `docker-compose.test.yml`; o comando Docker direto dispensa Bun no host |
+| `bun run test:isolated <suíte...>` | Modo nativo Linux/WSL, com infraestrutura isolada; exemplo: `bun run test:isolated test:atomicity test:crash-recovery` |
+| `bun run test:atomicity` | Executor interno: falha real de INSERT na Outbox, rollback integral e retry seguro (`test/atomicity.test.ts`) |
+| `bun run test:inbox-replay` | Executor interno: HTTP→SQS, inbox única e conflitos concorrentes de envelope |
+| `bun run test:parallel-wallets` | Executor interno: seis wallets com operações paralelas e reconciliação por wallet |
+| `bun run test:crash-recovery` / `test:sigterm` | Executores internos: SIGKILL, reentrega, reinício da API e encerramento gracioso |
+| `bun run test:consumer-retry` / `test:consumer-dlq-persistent` | Executores internos: retry/backoff observado e redrive real até a DLQ |
+| `bun run demo:sqs` | Demonstração ponta a ponta via SQS (`scripts/demo-sqs.ts`) |
+| `bun run format` / `format:check` | Prettier |
+
+Os executores individuais de integração são usados pelo runner. Para apresentação, prefira o Compose de testes; em desenvolvimento Linux/WSL, use `bun run test:isolated <suíte>`: o guard exige banco de teste, SQS local e origens HTTP locais explícitas. Os scripts standalone de corrida também recusam destinos remotos ou ausentes; para três instâncias, exigem três origens locais distintas. O runner preenche essas configurações automaticamente.
+
+### Troubleshooting
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `password authentication failed for user "jungle"` | `.env` com credenciais diferentes das do `docker-compose.yml` (`jungle`/`jungle`), ou um Postgres antigo na porta 5432 do Windows interferindo | Confirme `.env` contra `.env.example`; o Compose já expõe o Postgres em `55432` exatamente para não brigar com um Postgres local na 5432 |
+| `getaddrinfo ENOTFOUND postgres` ao rodar `bun run migration:*`/testes do host | `.env` copiado de `.env.docker` em vez de `.env.example` — `postgres` só resolve dentro da rede do Compose | Use `.env.example` como base para rodar fora do Docker (host `127.0.0.1:55432`) |
+| `address already in use` nas portas 3000-3003, 55432 ou 4566 | Outro processo (ou uma execução anterior não finalizada) ainda ocupando a porta | `docker compose ps`, ou localizar o processo com `Get-NetTCPConnection -LocalPort <porta>` no PowerShell |
+| `bun run migration:pending` lista as duas migrations mesmo após `up` | Rodou contra um banco diferente do que `.env`/`.env.docker` apontam | Confira `DATABASE_URL` — é fácil rodar o CLI contra o banco errado quando se alterna entre os dois modos de execução |
+| `/health/ready` sempre 503 | PostgreSQL ou LocalStack ainda não estão de pé, ou as filas não foram criadas | `docker compose ps` (ambos devem estar `healthy`); se for rodar fora do Docker, `bun run queues:init` precisa ter sido executado |
+| `TypeError: ... is not a function` vindo do MikroORM | Chamada a um método que não existe na versão instalada (ex.: `em.persistAndFlush`, removido no MikroORM 7) | Ver [Aprendizados técnicos](#aprendizados-técnicos) — esse caso específico já aconteceu neste projeto e foi corrigido em `src/application/services.ts` |
+| Erro de tipo do AWS SDK em `AttributeNames` | Nome de campo mudou entre versões do `@aws-sdk/client-sqs`; `ApproximateReceiveCount` migrou para `MessageSystemAttributeNames` | Já corrigido em `src/infrastructure/workers/consumer.ts`; se aparecer de novo após atualizar o SDK, é o mesmo tipo de problema |
+
+---
+
 ## Documentação complementar
 
+- **[frontend/README.md](frontend/README.md)** — telas, configuração e testes da console opcional.
 - **[docs/DEMONSTRACAO_DOCKER.md](docs/DEMONSTRACAO_DOCKER.md)** — dois comandos principais, preparo offline e roteiro de apresentação sem Bun no host.
 - **[docs/BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md)** — comandos seguros, matriz de requisitos, imagem Docker e limites das evidências.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — decisões técnicas, trade-offs e o registro detalhado do que foi validado, escrito pra quem avalia.

@@ -2,7 +2,13 @@ import './harness/environment';
 /** Real integration. Requires PostgreSQL, LocalStack and applied migrations. */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MikroORM } from '@mikro-orm/postgresql';
-import { type SQSClient } from '@aws-sdk/client-sqs';
+import {
+  CreateQueueCommand,
+  DeleteQueueCommand,
+  SendMessageCommand,
+  ReceiveMessageCommand,
+  type SQSClient,
+} from '@aws-sdk/client-sqs';
 import config from '../mikro-orm.config';
 import {
   ensureQueues,
@@ -172,3 +178,39 @@ describe('SQS/Inbox/Outbox reais', () => {
     }
   }, 30000);
 });
+
+test('configured SQS endpoint works even when the advertised QueueUrl hostname is unreachable', async () => {
+  const created = await client.send(
+    new CreateQueueCommand({
+      QueueName: `${process.env.SQS_QUEUE_PREFIX}endpoint-probe.fifo`,
+      Attributes: { FifoQueue: 'true' },
+    }),
+  );
+  const queueUrl = created.QueueUrl!;
+  try {
+    const advertised = new URL(queueUrl);
+    advertised.hostname = 'queue-url.invalid';
+    const id = uuid();
+    await client.send(
+      new SendMessageCommand({
+        QueueUrl: advertised.toString(),
+        MessageBody: id,
+        MessageGroupId: id,
+        MessageDeduplicationId: id,
+      }),
+      { abortSignal: AbortSignal.timeout(5000) },
+    );
+    const received = await client.send(
+      new ReceiveMessageCommand({
+        QueueUrl: advertised.toString(),
+        WaitTimeSeconds: 1,
+        MaxNumberOfMessages: 1,
+      }),
+      { abortSignal: AbortSignal.timeout(5000) },
+    );
+    expect(received.Messages).toHaveLength(1);
+    expect(received.Messages![0].Body).toBe(id);
+  } finally {
+    await client.send(new DeleteQueueCommand({ QueueUrl: queueUrl }));
+  }
+}, 20000);

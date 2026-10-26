@@ -124,11 +124,18 @@ Por que a regra de negócio não pode ficar concentrada no controller: o control
 
 ---
 
-## Validação segura do backend
+## Execução e testes pelo Docker
 
-Use Bun 1.4.4 e execute `bun install --frozen-lockfile`, `bun run typecheck` e `bun run test:all` na raiz. A suíte completa cria PostgreSQL, LocalStack, banco, filas e APIs exclusivos e remove seus próprios recursos ao terminar; não precisa parar a demonstração. Para selecionar suítes: `bun run test:isolated test:crash-recovery test:sigterm`.
+No Windows, macOS ou Linux com Docker em modo Linux e Compose v2, o backend pode ser apresentado sem Bun/Node instalados no computador:
 
-O [roteiro de validação do backend](docs/BACKEND_VALIDATION.md) relaciona comandos, resultados esperados, requisitos, isolamento e limitações. Os scripts individuais de integração agora recusam destinos que não sejam explicitamente de teste. Para testar sem Docker, `bun run test` executa as unidades.
+```bash
+docker compose up -d --build --wait
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
+```
+
+O primeiro comando sobe a aplicação e aguarda os health checks. O segundo executa Bun, testes, três APIs e workers em Linux, com PostgreSQL/SQS exclusivos. Não usa Bun nativo do Windows, não publica portas de teste e não toca no banco da apresentação. Ao concluir, remova só o projeto de testes com `docker compose -f docker-compose.test.yml down --volumes`.
+
+O [roteiro Docker](docs/DEMONSTRACAO_DOCKER.md) reúne preparação offline, resultados esperados, demonstração SQS e limpeza. A [matriz de validação](docs/BACKEND_VALIDATION.md) relaciona as suítes aos requisitos. O modo nativo `bun run test:isolated` continua disponível para desenvolvimento Linux/WSL.
 
 ## Como executar localmente
 
@@ -141,13 +148,11 @@ O [roteiro de validação do backend](docs/BACKEND_VALIDATION.md) relaciona coma
 ### Opção 1 — Tudo no Docker Compose (mais simples)
 
 ```powershell
-Copy-Item .env.example .env
-bun install --frozen-lockfile
-docker compose up -d --build
+docker compose up -d --build --wait
 docker compose ps
 ```
 
-Isso sobe, conforme definido em `docker-compose.yml`: `postgres` (porta `55432` no host, `5432` dentro da rede), `localstack` (porta `4566`), um serviço `migrate` que roda `bun run migration:up` e sai, três instâncias da API (`api1`, `api2`, `api3`, mapeadas para `3001`, `3002`, `3003`) e dois workers (`worker1`, `worker2`, com métricas em `9091`/`9092`).
+Isso sobe, conforme definido em `docker-compose.yml`: `postgres` (porta `55432` no host, `5432` dentro da rede), `localstack` (porta `4566`), um serviço `migrate` que roda `bun run migration:up` e sai, três instâncias da API (`api1`, `api2`, `api3`, mapeadas para `3001`, `3002`, `3003`) e dois workers (`worker1`, `worker2`, com métricas em `9091`/`9092`). APIs e workers usam a mesma imagem local; os workers têm `/health/ready` em sua porta de métricas, respondendo 503 até concluir o bootstrap e 200 quando prontos.
 
 ```powershell
 Invoke-RestMethod http://localhost:3001/health/live
@@ -205,8 +210,8 @@ Nunca misture os dois modos nas mesmas portas — ou a API do Compose, ou a do h
 | `bun run test:references` | Referências fora de ordem (`test/references.test.ts`) |
 | `bun run test:race` | Script standalone: 2 BETs concorrentes + 50x replay via HTTP (`scripts/race.ts`) |
 | `bun run test:3instances` | Mesmo cenário, mas contra 3 processos HTTP independentes (`scripts/race-three.ts`) |
-| `bun run test:all` | Cria PostgreSQL/LocalStack e três APIs exclusivos, executa todas as suítes e remove seus recursos; precisa de Docker Engine e Bun, sem API previamente iniciada |
-| `bun run test:isolated <suíte...>` | Seleciona suítes com o mesmo isolamento; exemplo: `bun run test:isolated test:atomicity test:crash-recovery` |
+| `bun run test:all` / `test:docker` | Atalho para a suíte Linux em `docker-compose.test.yml`; o comando Docker direto dispensa Bun no host |
+| `bun run test:isolated <suíte...>` | Modo nativo Linux/WSL, com infraestrutura isolada; exemplo: `bun run test:isolated test:atomicity test:crash-recovery` |
 | `bun run test:atomicity` | Executor interno: falha real de INSERT na Outbox, rollback integral e retry seguro (`test/atomicity.test.ts`) |
 | `bun run test:inbox-replay` | Executor interno: HTTP→SQS, inbox única e conflitos concorrentes de envelope |
 | `bun run test:parallel-wallets` | Executor interno: seis wallets com operações paralelas e reconciliação por wallet |
@@ -215,7 +220,7 @@ Nunca misture os dois modos nas mesmas portas — ou a API do Compose, ou a do h
 | `bun run demo:sqs` | Demonstração ponta a ponta via SQS (`scripts/demo-sqs.ts`) |
 | `bun run format` / `format:check` | Prettier |
 
-Os executores individuais de integração são usados pelo runner. Para executá-los com segurança, prefira `bun run test:isolated <suíte>`: o guard exige banco de teste, SQS local e origens HTTP locais explícitas. Os scripts standalone de corrida também recusam destinos remotos ou ausentes; para três instâncias, exigem três origens locais distintas. O runner preenche essas configurações automaticamente.
+Os executores individuais de integração são usados pelo runner. Para apresentação, prefira o Compose de testes; em desenvolvimento Linux/WSL, use `bun run test:isolated <suíte>`: o guard exige banco de teste, SQS local e origens HTTP locais explícitas. Os scripts standalone de corrida também recusam destinos remotos ou ausentes; para três instâncias, exigem três origens locais distintas. O runner preenche essas configurações automaticamente.
 
 ### Troubleshooting
 
@@ -855,23 +860,15 @@ Não é uma lista fechada no enunciado, mas é a taxonomia real usada em `Domain
 
 ## Testes e evidências
 
-Na raiz do repositório, com Bun 1.4.4 e Docker Engine disponíveis:
+A validação recomendada usa somente Docker com containers Linux, independentemente do sistema do host:
 
 ```bash
-bun install --frozen-lockfile
-bun run format:check
-bun run typecheck
-bun run test:all
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
 ```
 
-A suíte completa cria seus próprios containers, banco, filas e três processos HTTP. Não precisa da aplicação de demonstração rodando e não purga suas filas. O banco descartável é mantido enquanto as APIs/workers reiniciam nos testes; o runner remove seus próprios recursos ao terminar. Os comandos abaixo selecionam cenários com o mesmo isolamento:
+O container executa `format:check`, typecheck, migrations e as suítes abaixo. O código de saída do serviço `tests` é preservado; copie os artefatos antes de remover o projeto. Para selecionar suítes, use `TEST_SUITES` conforme o [roteiro Docker](docs/DEMONSTRACAO_DOCKER.md).
 
-```bash
-bun run test:isolated test:integration test:atomicity
-bun run test:isolated test:crash-recovery test:sigterm
-bun run test:isolated test:consumer-retry test:consumer-dlq-persistent
-bun run test:isolated test:race test:3instances
-```
+Para desenvolvimento nativo em Linux/WSL, continuam disponíveis `bun run test` (sem banco) e `bun run test:isolated <suítes...>` (cria infraestrutura exclusiva). Nesse modo, Bun deve estar instalado no host. Não use o modo nativo do Windows para validar o comportamento POSIX de SIGTERM.
 
 | Suíte | Arquivo / executor interno | O que testa | Risco coberto |
 |---|---|---|---|
@@ -891,7 +888,7 @@ A verificação final é **`wallet.balance == saldo reconstruído pelo ledger`**
 
 O ACK é observado por um evento emitido depois da resposta de `DeleteMessage`. Uma resposta vazia de `ReceiveMessage` não é usada como prova de remoção: a mensagem poderia estar apenas invisível. Os testes de retry leem as contagens reais de recepção e os intervalos de backoff.
 
-**Resultados de validação:** 55 testes do backend e os dois scripts de race passaram sem falhas, incluindo atomicidade integral e proteção de origens HTTP. `format:check` e typecheck também passaram; consulte o registro atualizado em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). O frontend tem sua validação separada: 37 testes Bun, 55 testes Vitest, typecheck e build. Esses resultados são evidência de execução, não uma promessa de ausência de defeitos; execute novamente os comandos antes de entregar.
+**Resultados da validação em containers Linux:** 57 testes do backend e os dois scripts de race passaram sem falhas, incluindo atomicidade integral e proteção de origens HTTP. `format:check` e typecheck também passaram; consulte o registro atualizado em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). O frontend tem sua validação separada: 37 testes Bun, 55 testes Vitest, typecheck e build. Esses resultados são evidência de execução, não uma promessa de ausência de defeitos; execute novamente os comandos antes de entregar.
 
 ---
 
@@ -982,6 +979,7 @@ Alguns problemas só apareceram rodando o projeto de verdade contra Postgres e L
 
 ## Documentação complementar
 
+- **[docs/DEMONSTRACAO_DOCKER.md](docs/DEMONSTRACAO_DOCKER.md)** — dois comandos principais, preparo offline e roteiro de apresentação sem Bun no host.
 - **[docs/BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md)** — comandos seguros, matriz de requisitos, imagem Docker e limites das evidências.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — decisões técnicas, trade-offs e o registro detalhado do que foi validado, escrito pra quem avalia.
 - **[docs/STUDY_GUIDE.md](docs/STUDY_GUIDE.md)** — trilha de leitura sugerida (arquivo por arquivo, pergunta por pergunta) e glossário dos termos usados neste README.

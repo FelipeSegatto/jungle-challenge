@@ -7,9 +7,11 @@
 - [ ] `bun --version` retorna 1.4.4
 - [ ] `bun install --frozen-lockfile` executa sem erros
 - [ ] `bun run format:check` e `bun run typecheck` aprovam
-- [ ] `bun run test:all` prepara e remove infraestrutura exclusiva, com todas as suítes aprovadas
+- [ ] `docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests` aprova a suíte Linux sem Bun no host
+- [ ] Logs copiados antes de `docker compose -f docker-compose.test.yml down --volumes`
+- [ ] Docker está em modo Linux e as imagens foram preparadas antes da apresentação
 - [ ] Guards rejeitam destinos HTTP remotos/ausentes, duplicação de origens e banco de desenvolvimento
-- [ ] `docker compose up -d --build` sobe serviços, migrations e três APIs
+- [ ] `docker compose up -d --build --wait` sobe serviços, migrations e três APIs
 - [ ] `GET /health/live`, `GET /health/ready` e `/health/metrics` funcionam
 - [ ] `bun run migration:pending` não lista migrations inesperadas
 

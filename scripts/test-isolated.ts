@@ -1,3 +1,4 @@
+import { backendSuites, runBackendChecks } from './test-runtime';
 /** Run backend integration checks in disposable local containers, never the developer's database. */
 import { randomBytes } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
@@ -76,21 +77,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     void cleanup().finally(() => process.exit(130));
   });
 
-const scripts = [
-  'test',
-  'test:integration',
-  'test:atomicity',
-  'test:messaging',
-  'test:references',
-  'test:parallel-wallets',
-  'test:inbox-replay',
-  'test:crash-recovery',
-  'test:sigterm',
-  'test:consumer-retry',
-  'test:consumer-dlq-persistent',
-  'test:race',
-  'test:3instances',
-];
+const scripts = backendSuites;
 const requested = process.argv.slice(2);
 if (requested.some((script) => !scripts.includes(script)))
   throw new Error(`Unknown suite. Choose: ${scripts.join(', ')}`);
@@ -148,23 +135,7 @@ try {
     BASE_URL: `http://127.0.0.1:${ports[0]}`,
     BASE_URLS: ports.map((port) => `http://127.0.0.1:${port}`).join(','),
   };
-  await command([process.execPath, 'run', 'migration:up'], env);
-  for (const port of ports) {
-    const child = Bun.spawn([process.execPath, 'src/main.ts'], {
-      env: { ...env, PORT: String(port) },
-      stdout: Bun.file(join(logs, `api-${port}.log`)),
-      stderr: Bun.file(join(logs, `api-${port}.err.log`)),
-    });
-    children.add(child);
-    await until(async () => (await fetch(`http://127.0.0.1:${port}/health/ready`)).ok);
-  }
-  for (const [index, suite] of (requested.length ? requested : scripts).entries()) {
-    console.log(`Running ${suite} with isolated database/queues`);
-    const suiteEnv = { ...env, SQS_QUEUE_PREFIX: `jungle-test-${id}-${index}-` };
-    const output = await command([process.execPath, 'run', suite], suiteEnv);
-    console.log(output);
-  }
-  console.log(`PASS: isolated checks completed. API logs: ${logs}`);
+  await runBackendChecks(env, requested, logs);
 } finally {
   await cleanup();
 }

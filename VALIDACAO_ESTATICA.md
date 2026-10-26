@@ -1,12 +1,12 @@
 # Relatório de verificação da entrega
 
-A verificação sintática inicial foi ampliada com execução real. Para reproduzir na raiz:
+A verificação sintática inicial foi ampliada com execução real. Para a suíte portável, basta Docker/Compose em modo Linux; Bun no host é opcional para os checks estáticos abaixo. Para reproduzir na raiz:
 
 ```bash
 bun install --frozen-lockfile
 bun run format:check
 bun run typecheck
-bun run test:all
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
 ```
 
 ## O que cada etapa verifica

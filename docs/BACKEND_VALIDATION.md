@@ -1,28 +1,20 @@
 # Validação do backend e apresentação
 
-Use Bun 1.4.4 e Docker Engine acessível. A aplicação continua usando os nomes de filas originais quando `SQS_QUEUE_PREFIX` está ausente.
+O caminho recomendado para Windows, macOS e Linux usa Docker Engine/Compose v2 em modo Linux. O host não precisa de Bun, Node.js ou WSL configurado manualmente. O runtime é Bun 1.4.4 dentro da imagem.
 
 ## Execução segura dos testes
 
-Na raiz:
-
 ```bash
-bun install --frozen-lockfile
-bun run typecheck
-bun run test:all
+docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests
 ```
 
-`test:all` agora cria dois containers exclusivos (PostgreSQL e LocalStack), um banco com nome aleatório terminado em `_test`, três APIs em portas locais disponíveis e um prefixo de filas diferente para cada suíte. Não usa `.env` como destino do banco e não purga filas existentes. O PostgreSQL descartável usa tmpfs de 512 MB; os processos de API/worker reiniciam mantendo esse banco durante o teste. Ao final ou em SIGINT/SIGTERM, remove somente os containers/volumes que criou. Logs das APIs ficam no diretório temporário informado na saída.
+`docker-compose.test.yml` cria o projeto separado `jungle-challenge-tests`. O serviço `tests` executa `scripts/test-linux.ts`, que espera os sidecars PostgreSQL/LocalStack, aplica migrations e chama a mesma execução compartilhada de `scripts/test-runtime.ts`. Três APIs e os workers de teste são processos Linux reais dentro desse container, sem memória de aplicação compartilhada. Os sidecars compartilham o loopback do serviço `tests`, sem publicar portas nem montar socket Docker, código do host ou volumes da aplicação. A rede de runtime é interna.
 
-Para executar apenas uma parte, também isolada:
+O banco é descartável e os prefixos de filas são únicos por execução/suíte. O Compose encerra os sidecars quando o runner termina e devolve seu código de saída. Os containers parados e logs em `/artifacts` são mantidos para diagnóstico até `docker compose -f docker-compose.test.yml down --volumes`. Esse comando não remove os dados da demonstração.
 
-```bash
-bun run test:isolated test:crash-recovery test:sigterm
-bun run test:isolated test:consumer-retry test:consumer-dlq-persistent
-bun run test:isolated test:inbox-replay test:atomicity
-```
+Consulte [DEMONSTRACAO_DOCKER.md](DEMONSTRACAO_DOCKER.md) para selecionar suítes no PowerShell/Bash, preparar as imagens antes da apresentação, copiar logs e iniciar a aplicação.
 
-Os scripts individuais de integração são usados internamente pelo runner. O guard exige `BASE_URL` e `BASE_URLS` locais explícitos, além do banco/SQS de teste. Rejeita destinos remotos, credenciais embutidas, caminhos, query e fragmento; `BASE_URLS` precisa ter pelo menos três origens distintas. Os scripts standalone de corrida também verificam seus destinos antes de qualquer requisição. Executá-los sem os destinos de teste explícitos falha antes de acessar o banco/fila. `bun run test` continua executando as unidades sem Docker. Não se deve contornar essa proteção para apontar testes à demonstração.
+O modo nativo `bun run test:isolated <suítes...>` continua disponível em Linux/WSL, com Bun instalado. Ele usa o mesmo executor de testes, mas cria os containers pelo Docker CLI do host. `bun run test:all` e `bun run test:docker` agora são atalhos para o Compose, evitando a execução nativa dos workers no Windows. Os executores internos exigem banco/SQS de teste e origens HTTP locais explícitas.
 
 ## Evidência por cenário
 
@@ -38,12 +30,12 @@ Os scripts individuais de integração são usados internamente pelo runner. O g
 | `test:consumer-retry` | Rejeição de negócio com ACK; falha transitória com recepções 1 e 2 e intervalo mínimo de backoff; JSON inválido enviado diretamente à DLQ na tentativa 1 | Seção 10 |
 | `test:consumer-dlq-persistent` | Recepções 1–5 e intervalos exponenciais; mensagem real na DLQ, sem operação financeira; métrica de backlog inclui redrive automático | Seções 10, 12 e 13 |
 | `test:references` | REFUND antes da BET; referência ausente esgota limite; WIN antes/depois da BET | Seção 7.1 |
-| `test:messaging` | Inbox/redelivery, publishers concorrentes e falha de publicação com recuperação | Seção 11 |
+| `test:messaging` | Inbox/redelivery, publishers concorrentes, recuperação da publicação e transporte por SQS_ENDPOINT mesmo com hostname de QueueUrl inacessível | Seção 11 |
 | `test:race`, `test:3instances` | 100−80−1=19; dois débitos; 50 duplicatas resultam em um efeito; reconciliação consistente | Seções 8 e 13 |
 
 ACK é comprovado pelo evento `sqs_processed`, emitido **depois** da resposta bem-sucedida de `DeleteMessage`, não pela ausência de mensagem em uma recepção do SQS. O teste de crash também exige a contagem real de reentrega. O cenário de reinício confere tanto as linhas da outbox quanto o conteúdo recebido na fila.
 
-O teste SIGTERM exige encerramento gracioso e não aceita morte abrupta seguida de recuperação como substituto. A plataforma de referência é Linux/Docker; uma falha em outro sistema deve ser investigada como incompatibilidade, sem relaxar o teste.
+O teste SIGTERM também confere readiness 200 após o bootstrap e 503 com SQS indisponível. Exige encerramento gracioso e não aceita morte abrupta seguida de recuperação como substituto. A plataforma de referência é Linux/Docker; uma falha em outro sistema deve ser investigada como incompatibilidade, sem relaxar o teste.
 
 ## Métricas e segurança
 
@@ -65,7 +57,7 @@ Testes reais em LocalStack não substituem validação operacional na AWS. O pub
 O Dockerfile usa Bun 1.4.4 e instala com lockfile congelado antes de copiar o código. O `.dockerignore` exclui dependências locais, `.git`, logs, saídas de build e arquivos `.env*`, preservando apenas os exemplos. O Compose continua fornecendo `.env.docker` em runtime: esse arquivo não precisa estar dentro da imagem.
 
 ```bash
-docker build -t jungle-challenge .
+docker build -t jungle-challenge:local -t jungle-challenge-tests:local .
 docker compose up -d --build
 ```
 
@@ -73,10 +65,10 @@ Quando o registro npm é acessado por um proxy com CA privada, forneça a CA com
 
 ```bash
 docker build --build-arg HTTP_PROXY --build-arg HTTPS_PROXY --build-arg NO_PROXY \
-  --secret id=registry_ca,src=/caminho/ca.pem -t jungle-challenge .
+  --secret id=registry_ca,src=/caminho/ca.pem -t jungle-challenge:local -t jungle-challenge-tests:local .
 ```
 
-O segredo é opcional; redes com certificados públicos usam a instalação normal. A CA não é copiada para a imagem nem definida no ambiente de runtime. A verificação TLS e a integridade do lockfile permanecem ativas. Se o builder não resolver o hostname do proxy, corrija o DNS do builder; não desative a verificação TLS para contornar isso.
+Depois de um build manual, use `--no-build` para subir a aplicação ou o Compose de testes com essas tags já preparadas. O segredo é opcional; redes com certificados públicos usam a instalação normal. A CA não é copiada para a imagem nem definida no ambiente de runtime. A verificação TLS e a integridade do lockfile permanecem ativas. Se o builder não resolver o hostname do proxy, corrija o DNS do builder; não desative a verificação TLS para contornar isso.
 
 A imagem foi construída e executada em rede Docker exclusiva com PostgreSQL e LocalStack. Foram exercitados migrations `up → down → down → up → pending`, typecheck, unidades, criação de wallet, BET, replay, consulta de ledger, reconciliação e aposta de 25 via SQS terminando em saldo 75. A ausência dos arquivos de ambiente e da CA de build no runtime também foi verificada.
 
@@ -86,8 +78,11 @@ A imagem foi construída e executada em rede Docker exclusiva com PostgreSQL e L
 
 ## Recursos e limites da execução
 
-No ambiente de validação, o Docker usa VFS, que copia as camadas de cada container. Build, teste da imagem e suíte do host foram executados em sequência para limitar uso de disco. O PostgreSQL descartável usa tmpfs; isso não altera o volume persistente configurado para a aplicação no Compose.
+No ambiente de validação Linux/amd64, o Docker usa VFS, que copia as camadas de cada container. Build, teste da imagem e suíte do host foram executados em sequência para limitar uso de disco. O PostgreSQL descartável usa tmpfs; isso não altera o volume persistente configurado para a aplicação no Compose.
 
 ## Verificação desta revisão
 
-Em Linux/Bun 1.4.4, passaram `format:check`, typecheck, 55 testes do backend e os dois scripts de corrida. Atomicidade integral e guards HTTP integram essa suíte permanente. O frontend passou em typecheck, 37 testes Bun, 55 testes Vitest e build, sem alterações em seus arquivos. A auditoria de dependências da raiz não apontou vulnerabilidades após o override de multer. A imagem construída passou nas verificações descritas acima. Esses resultados foram observados e não representam cobertura de todas as combinações de falha possíveis.
+Dentro do container Linux/Bun 1.4.4, passaram `format:check`, typecheck, 57 testes do backend e os dois scripts de corrida. Atomicidade integral e guards HTTP integram essa suíte permanente. O frontend passou em typecheck, 37 testes Bun, 55 testes Vitest e build, sem alterações em seus arquivos. A auditoria de dependências da raiz não apontou vulnerabilidades após o override de multer. A imagem construída passou nas verificações descritas acima. Esses resultados foram observados e não representam cobertura de todas as combinações de falha possíveis.
+
+
+A primeira suíte Docker passou nos 55 cenários existentes e os cenários críticos SIGTERM/retry/DLQ passaram em duas novas execuções. Depois da adição da readiness do worker, a suíte completa final passou em 57 cenários, incluindo o transporte SQS com hostname de QueueUrl de outra rede e nos scripts de corrida. Isso valida execução Linux em containers nesta máquina de referência; não é uma alegação de execução física observada em todos os hosts Windows/macOS ou arquiteturas.

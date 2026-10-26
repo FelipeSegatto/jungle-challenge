@@ -16,6 +16,9 @@ export function sqsClient(): SQSClient {
   return new SQSClient({
     region: process.env.AWS_REGION ?? 'us-east-1',
     endpoint: process.env.SQS_ENDPOINT ?? 'http://127.0.0.1:4566',
+    // LocalStack can advertise a QueueUrl hostname valid only in another network namespace.
+    // Use the explicitly configured endpoint for both host and Docker clients.
+    useQueueUrlAsEndpoint: false,
     credentials: {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? 'test',
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? 'test',

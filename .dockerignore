@@ -8,3 +8,5 @@ coverage
 *.zip
 *.log
 dist
+
+artifacts

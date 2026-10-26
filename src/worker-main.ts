@@ -9,16 +9,29 @@ import { registry, outboxLag } from './infrastructure/metrics';
 async function main(): Promise<void> {
   const orm = await MikroORM.init(config);
   const client = sqsClient();
+  let shutdown = false;
+  let ready = false;
   const metricsServer = Bun.serve({
     port: Number(process.env.METRICS_PORT ?? '9090'),
-    fetch: async (request) =>
-      request.url.endsWith('/metrics')
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === '/health/ready') {
+        const healthy = ready && !shutdown;
+        return Response.json(
+          { status: healthy ? 'ok' : 'not_ready' },
+          { status: healthy ? 200 : 503 },
+        );
+      }
+      return path === '/metrics'
         ? new Response(await registry.metrics(), {
             headers: { 'Content-Type': registry.contentType },
           })
-        : new Response('Not found', { status: 404 }),
+        : new Response('Not found', { status: 404 });
+    },
   });
-  let shutdown = false;
+  console.log(
+    JSON.stringify({ level: 'info', event: 'worker_starting', metricsPort: metricsServer.port }),
+  );
   process.once('SIGTERM', () => {
     shutdown = true;
   });
@@ -38,7 +51,10 @@ async function main(): Promise<void> {
       }
     }
     if (!queues) throw new Error('SQS_BOOTSTRAP_FAILED');
-    console.log(JSON.stringify({ level: 'info', event: 'worker_ready' }));
+    ready = true;
+    console.log(
+      JSON.stringify({ level: 'info', event: 'worker_ready', metricsPort: metricsServer.port }),
+    );
     // Each batch finishes before shutdown. Redelivery covers a kill -9 or container crash.
     while (!shutdown) {
       try {
@@ -67,6 +83,7 @@ async function main(): Promise<void> {
       }
     }
   } finally {
+    ready = false;
     metricsServer.stop(true);
     client.destroy();
     await orm.close(true);

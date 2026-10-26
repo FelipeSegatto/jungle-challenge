@@ -23,13 +23,14 @@
     "test:sigterm": "bun test test/worker-sigterm.test.ts",
     "test:consumer-retry": "bun test test/consumer-retry-dlq.test.ts",
     "test:consumer-dlq-persistent": "bun test test/consumer-dlq-persistent.test.ts",
-    "test:all": "bun scripts/test-isolated.ts",
+    "test:all": "docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests",
     "demo:sqs": "bun scripts/demo-sqs.ts",
     "format": "bunx prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
     "format:check": "bunx prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
     "test:isolated": "bun scripts/test-isolated.ts",
     "test:inbox-replay": "bun test ./test/inbox-replay.test.ts",
-    "test:atomicity": "bun test ./test/atomicity.test.ts"
+    "test:atomicity": "bun test ./test/atomicity.test.ts",
+    "test:docker": "docker compose -f docker-compose.test.yml up --build --exit-code-from tests --attach tests"
   },
   "dependencies": {
     "@mikro-orm/core": "^7.0.0",

@@ -1,0 +1,43 @@
+# All Bun processes run in Linux. Services share only this test pod's loopback.
+# No host ports, source bind mounts, Docker socket or development volumes.
+name: jungle-challenge-tests
+services:
+  tests:
+    build: .
+    image: jungle-challenge-tests:local
+    init: true
+    environment:
+      TEST_SUITES: ${TEST_SUITES:-}
+    command: ["bun", "scripts/test-linux.ts"]
+    stop_grace_period: 20s
+    tmpfs:
+      - /tmp:rw,size=128m
+
+  postgres-test:
+    image: postgres:16-alpine
+    network_mode: service:tests
+    depends_on:
+      tests:
+        condition: service_started
+    environment:
+      POSTGRES_USER: jungle
+      POSTGRES_PASSWORD: jungle
+      POSTGRES_DB: jungle_d0cce7_test
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=512m
+
+  localstack-test:
+    image: localstack/localstack:4.10
+    network_mode: service:tests
+    depends_on:
+      tests:
+        condition: service_started
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+      LOCALSTACK_HOST: 127.0.0.1:4566
+
+networks:
+  default:
+    internal: true

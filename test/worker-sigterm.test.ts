@@ -59,6 +59,8 @@ test('SIGTERM finishes the in-flight message, confirms ACK and exits cleanly wit
   try {
     await submitMessage(client, (await ensureQueues(client)).input, event);
     await waitForSentinel(dir, 'before-process', 30000);
+    const ready = await waitForWorkerEvent(worker, 'worker_ready');
+    expect((await fetch(`http://127.0.0.1:${ready.metricsPort}/health/ready`)).status).toBe(200);
     worker.kill('SIGTERM');
     expect(await waitForExit(worker, 10000)).toBe(0);
     expect((await waitForWorkerEvent(worker, 'sqs_processed', messageId)).status).toBe('PROCESSED');
@@ -69,3 +71,18 @@ test('SIGTERM finishes the in-flight message, confirms ACK and exits cleanly wit
   await assertBalanceMatchesLedger(orm.em, wallet.id, '60.00');
   expect(await orm.em.fork().count(LedgerRow, { walletId: wallet.id, direction: 'DEBIT' })).toBe(1);
 }, 60000);
+
+test('worker readiness stays unavailable while SQS bootstrap cannot complete', async () => {
+  const reservation = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
+  const closedPort = reservation.port!;
+  reservation.stop(true);
+  const worker = spawnWorker({ env: { SQS_ENDPOINT: `http://127.0.0.1:${closedPort}` } });
+  try {
+    const starting = await waitForWorkerEvent(worker, 'worker_starting');
+    const response = await fetch(`http://127.0.0.1:${starting.metricsPort}/health/ready`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: 'not_ready' });
+  } finally {
+    await killAndWait(worker);
+  }
+}, 30000);

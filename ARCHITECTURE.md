@@ -249,7 +249,7 @@ Isso, por si só, garante imutabilidade na camada de aplicação, mas não imped
 
 ## 13. Validação executada
 
-A validação usa Bun 1.4.4, TypeScript estrito, PostgreSQL e LocalStack reais. O comando `bun run test:all` cria infraestrutura exclusiva e três APIs; não depende dos serviços da demonstração. `bun run test:isolated <suíte...>` seleciona uma parte com a mesma preparação e limpeza.
+A validação usa Bun 1.4.4, TypeScript estrito, PostgreSQL e LocalStack reais. O comando Docker de `docker-compose.test.yml` (também disponível via `bun run test:all`) cria infraestrutura exclusiva e três APIs Linux; não depende dos serviços da demonstração. `bun run test:isolated <suíte...>` seleciona uma parte com a mesma preparação e limpeza.
 
 | Grupo | Evidência |
 |---|---|
@@ -261,7 +261,7 @@ A validação usa Bun 1.4.4, TypeScript estrito, PostgreSQL e LocalStack reais. 
 | Shutdown | SIGTERM com mensagem em andamento, ACK depois do commit, `worker_stopped` e saída 0 dentro do prazo |
 | Retry e DLQ | Contagens 1–5 e backoff observados, redrive real, mensagem inválida na tentativa 1 e rejeição de negócio confirmada normalmente |
 
-A validação passou nos 55 testes do backend e nos dois scripts de corrida, incluindo atomicidade integral e rejeição de destinos HTTP inseguros. O registro da execução está em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). Os números representam execuções observadas e não substituem repetir a validação antes da entrega.
+A validação em containers Linux passou nos 57 testes do backend e nos dois scripts de corrida, incluindo atomicidade integral e rejeição de destinos HTTP inseguros. O registro da execução está em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md). Os números representam execuções observadas e não substituem repetir a validação antes da entrega.
 
 A invariante financeira é conferida contra o ledger e contra o saldo esperado, não apenas contra um booleano retornado pela API. O teste de atomicidade injeta a falha em PostgreSQL real, limitada à wallet daquele teste, e remove seu trigger no `finally`.
 
@@ -303,10 +303,24 @@ Migrations são `Migration202610230001` (schema base) e `Migration202610240002` 
 
 ## 16. Isolamento e reprodução dos testes
 
-O runner `scripts/test-isolated.ts` cria infraestrutura e três APIs exclusivas por execução, com prefixo de filas por suíte e banco temporário. A suíte não usa purge na fila da aplicação. Os guards validam banco e SQS locais, `BASE_URL` explícito e `BASE_URLS` com três origens HTTP locais distintas; rejeitam credenciais embutidas, caminhos, query e fragmento. Os scripts standalone também validam suas origens antes de qualquer requisição. Os detalhes e os limites da evidência estão em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md).
+O Compose de testes fornece PostgreSQL/SQS exclusivos e um container Linux com Bun. `scripts/test-linux.ts` chama o executor compartilhado `scripts/test-runtime.ts`; `scripts/test-isolated.ts` preserva o modo nativo Linux/WSL. Há três processos de API, prefixo de filas por suíte e banco temporário. A suíte não usa purge na fila da aplicação. Os guards validam banco e SQS locais, `BASE_URL` explícito e `BASE_URLS` com três origens HTTP locais distintas; rejeitam credenciais embutidas, caminhos, query e fragmento. Os scripts standalone também validam suas origens antes de qualquer requisição. Os detalhes e os limites da evidência estão em [BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md).
 
 Replays SQS passam pela validação do hash de inbox e registram a mensagem mesmo quando a operação financeira foi inicialmente HTTP. O registro usa INSERT ON CONFLICT na transação do EntityManager e valida o envelope vencedor; saldo, ledger e outbox não são reaplicados. Constraints e contratos HTTP permanecem os mesmos.
 
 ACK é verificado após DeleteMessage responder. O teste de reinício encerra a API que recebeu a operação, inicia outra e compara o replay, além de receber os envelopes reais publicados pela outbox. O teste SIGTERM exige saída graciosa, com ACK e worker_stopped. Inbox/Outbox têm modelos de domínio com factories e transições; OPENING usa factory interna.
 
 A gauge wagering_dlq_messages observa backlog, incluindo redrive automático, e complementa o contador de envios diretos wagering_dlq_total. O Dockerfile usa lockfile congelado e Bun 1.4.4. A dependência transitiva multer é fixada em 2.5.0 por override para corrigir o advisory conhecido.
+
+
+## 17. Portabilidade da apresentação
+
+A apresentação usa a aplicação em containers Linux e a validação usa `docker-compose.test.yml`. O host fornece apenas Docker/Compose: SIGTERM e subprocessos Bun são controlados pelo kernel Linux do container, inclusive no Docker Desktop. Não é necessário alterar as regras financeiras para adaptar sinais do Windows.
+
+PostgreSQL e LocalStack dos testes usam `network_mode: service:tests`; o loopback continua válido para os guards e para as URLs reais das filas. Não são publicados serviços de teste no host. A rede interna impede saída de runtime para a Internet, e não há montagem do socket Docker. Logs ficam no container até a remoção explícita do projeto, permitindo preservar evidências após falha.
+
+A aplicação ganhou health checks para `docker compose up --wait`. O worker expõe `/health/ready` na porta de métricas: 503 até inicializar as filas ou durante shutdown; 200 após bootstrap. Isso não substitui os testes financeiros ou a verificação periódica de dependências das APIs. As portas padrão e os contratos financeiros foram preservados.
+
+Docker reduz diferenças de runtime, mas ainda exige imagens compatíveis com a arquitetura, recursos livres e Docker Desktop em modo Linux. A execução física de referência é Linux/amd64; resultados em Windows/macOS devem ser observados pelo mesmo comando, sem prometer suporte nativo do Bun a sinais POSIX nesses hosts.
+
+
+O cliente SQS configura `useQueueUrlAsEndpoint: false`: as requisições usam o endpoint configurado, enquanto QueueUrl continua identificando a fila. Isso evita que uma URL anunciada para outra rede direcione um container ao seu próprio loopback. Há uma regressão com envio e recepção reais usando hostname inacessível na QueueUrl, sem desligar assinatura ou verificação TLS.

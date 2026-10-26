@@ -271,8 +271,7 @@ jungle-wagering/
 ├── scripts/                        # test-isolated.ts, test-targets.ts, races e demonstrações
 ├── docker-compose.yml
 ├── mikro-orm.config.ts
-├── ARCHITECTURE.md
-└── challenge.md                    # Enunciado original
+└── ARCHITECTURE.md
 ```
 
 Alguns arquivos merecem contexto além do nome:
@@ -983,5 +982,4 @@ Alguns problemas só apareceram rodando o projeto de verdade contra Postgres e L
 - **[docs/BACKEND_VALIDATION.md](docs/BACKEND_VALIDATION.md)** — comandos seguros, matriz de requisitos, imagem Docker e limites das evidências.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — decisões técnicas, trade-offs e o registro detalhado do que foi validado, escrito pra quem avalia.
 - **[docs/STUDY_GUIDE.md](docs/STUDY_GUIDE.md)** — trilha de leitura sugerida (arquivo por arquivo, pergunta por pergunta) e glossário dos termos usados neste README.
-- **[GUIA_DE_APRESENTACAO.md](GUIA_DE_APRESENTACAO.md)** — roteiro para apresentar o projeto em 10-15 minutos, com as perguntas que um revisor sênior provavelmente vai fazer.
-- **[challenge.md](challenge.md)** — o enunciado original do desafio.
+- **[docs/COMANDOS_DE_VALIDACAO.md](docs/COMANDOS_DE_VALIDACAO.md)** — cada requisito do desafio ligado ao comando real que o exercita.

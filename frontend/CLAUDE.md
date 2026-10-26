@@ -66,7 +66,6 @@ Ver a tabela completa em [`../README.md#api--endpoints-e-exemplos`](../README.md
 - [`../README.md`](../README.md) — arquitetura, domínio, todos os endpoints, exemplos reais.
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — decisões e trade-offs do backend.
 - [`../docs/STUDY_GUIDE.md`](../docs/STUDY_GUIDE.md) — glossário dos termos (Idempotency-Key, Ledger, FIFO, etc.) usados aqui também.
-- [`../challenge.md`](../challenge.md) — enunciado original.
 
 ## Status
 

@@ -10,7 +10,7 @@ A ideia é abrir o VS Code e seguir cada tema abrindo o arquivo indicado, achand
 
 **Entenda:** o que é um provedor de jogo, o que é uma rodada, por que `BET`/`WIN`/`LOSS`/`REFUND`/`ROLLBACK` são os únicos tipos de operação, e por que "at-least-once" muda tudo.
 
-**Abra:** `challenge.md` (seções 1 a 3).
+**Releia:** o enunciado original do desafio (seções 1 a 3), fornecido separadamente pela Jungle Gaming.
 
 **Pergunta que você precisa saber responder:** por que o desafio diz explicitamente que não está avaliando CRUD?
 
